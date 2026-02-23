@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Suprematism Evolver</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#F4F1EC;--surface:#FFFFFF;--surface2:#EBE7E0;--border:#CBC6BA;
+  --text:#1a1a1a;--text-dim:#6b6560;
+  --red:#CC0000;--black:#000000;--blue:#0044AA;--yellow:#E8C800;
+  --accent:var(--red);--accent-hover:#E01010;
+  --radius:2px;--sidebar:280px;--header-h:60px;
+}
+html{font-family:'Space Grotesk','Inter',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text)}
+body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* ---- Header ---- */
+.header{
+  height:var(--header-h);display:flex;align-items:center;justify-content:center;
+  background:var(--surface);border-bottom:2px solid var(--black);
+  flex-shrink:0;position:relative;z-index:10;
+}
+.header h1{
+  font-family:'Bebas Neue',sans-serif;font-size:2rem;font-weight:400;
+  letter-spacing:.18em;text-transform:uppercase;color:var(--black);
+  white-space:nowrap;
+}
+.header h1 .red{color:var(--red)}
+.header h1 .blue{color:var(--blue)}
+.header h1 .yellow{color:var(--yellow)}
+
+/* ---- App body ---- */
+.app-body{
+  display:flex;flex:1;min-height:0;
+}
+
+/* ---- Sidebar ---- */
+.sidebar{
+  width:var(--sidebar);flex-shrink:0;background:var(--surface);
+  border-right:2px solid var(--black);
+  display:flex;flex-direction:column;overflow-y:auto;
+}
+.sidebar-section{padding:20px 20px 0}
+.sidebar-section:last-child{padding-bottom:20px}
+.sidebar-section + .sidebar-section{border-top:1px solid var(--border)}
+.section-label{
+  font-size:.65rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--text-dim);margin-bottom:12px;
+}
+
+/* Gen nav in sidebar */
+.gen-nav{display:flex;align-items:center;gap:6px;justify-content:center;padding:16px 20px;border-bottom:1px solid var(--border)}
+.gen-badge{
+  font-size:.85rem;font-variant-numeric:tabular-nums;font-weight:500;
+  background:var(--black);color:#fff;border:none;border-radius:var(--radius);
+  padding:6px 16px;white-space:nowrap;flex:1;text-align:center;
+}
+.gen-badge strong{color:var(--yellow)}
+.btn-nav{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:32px;height:32px;border:2px solid var(--border);border-radius:var(--radius);
+  background:var(--surface);color:var(--text);cursor:pointer;
+  transition:background .15s,border-color .15s,opacity .15s;padding:0;flex-shrink:0;
+}
+.btn-nav:hover:not(:disabled){background:var(--surface2);border-color:var(--text-dim)}
+.btn-nav:disabled{opacity:.25;cursor:not-allowed}
+.btn-nav svg{width:16px;height:16px}
+
+/* Control rows */
+.control-row{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
+.control-row:last-child{margin-bottom:0}
+.control-row label{
+  font-size:.7rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--text-dim);
+}
+.control-row select{
+  width:100%;background:var(--surface);color:var(--text);
+  border:2px solid var(--border);border-radius:var(--radius);
+  padding:7px 10px;font-size:.82rem;cursor:pointer;
+  font-family:inherit;font-weight:500;
+}
+.control-row select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+
+/* Range slider */
+.slider-row{display:flex;align-items:center;gap:8px}
+.slider-row input[type="range"]{
+  -webkit-appearance:none;appearance:none;flex:1;height:6px;
+  background:var(--border);border-radius:3px;outline:none;cursor:pointer;
+}
+.slider-row input[type="range"]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+  background:var(--red);border:2px solid var(--surface);cursor:pointer;
+  box-shadow:0 1px 3px rgba(0,0,0,.2);
+}
+.slider-row input[type="range"]::-moz-range-thumb{
+  width:16px;height:16px;border-radius:50%;
+  background:var(--red);border:2px solid var(--surface);cursor:pointer;
+}
+.range-val{
+  font-size:.78rem;font-weight:600;font-variant-numeric:tabular-nums;
+  min-width:2em;text-align:right;color:var(--text);
+}
+
+/* Action buttons */
+.action-stack{display:flex;flex-direction:column;gap:8px}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  padding:9px 16px;border:none;border-radius:var(--radius);font-size:.82rem;
+  font-weight:600;cursor:pointer;transition:background .15s,opacity .15s;
+  font-family:inherit;text-transform:uppercase;letter-spacing:.04em;
+  width:100%;
+}
+.btn-primary{background:var(--red);color:#fff}
+.btn-primary:hover:not(:disabled){background:var(--accent-hover)}
+.btn-primary:disabled{opacity:.3;cursor:not-allowed}
+.btn-row{display:flex;gap:8px}
+.btn-row .btn{flex:1}
+.btn-secondary{background:var(--surface2);color:var(--text);border:2px solid var(--border)}
+.btn-secondary:hover:not(:disabled){background:var(--border)}
+.btn-secondary:disabled{opacity:.4;cursor:not-allowed}
+.btn-danger{background:var(--black);color:#fff}
+.btn-danger:hover{background:#333}
+
+/* Selection info */
+.selection-info{
+  font-size:.78rem;color:var(--text-dim);font-weight:500;
+  min-height:1.2em;word-break:break-word;
+}
+
+/* About text */
+.about-text{font-size:.75rem;line-height:1.6;color:var(--text-dim)}
+
+/* ---- Grid area ---- */
+.grid-area{
+  flex:1;overflow-y:auto;padding:24px;background:var(--bg);min-width:0;
+}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:14px;max-width:1600px;margin:0 auto;
+}
+.cell{
+  position:relative;border-radius:var(--radius);overflow:hidden;
+  cursor:pointer;border:3px solid var(--border);
+  transition:border-color .15s,transform .15s,box-shadow .15s;
+  aspect-ratio:1;background:var(--surface);
+}
+.cell img{width:100%;height:100%;object-fit:cover;display:block}
+.cell:hover{transform:scale(1.03);box-shadow:0 4px 20px rgba(0,0,0,.12)}
+.cell.selected{border-color:var(--red);box-shadow:0 0 0 1px var(--red),0 4px 20px rgba(204,0,0,.15)}
+.cell .idx{
+  position:absolute;top:4px;left:4px;font-size:.7rem;font-weight:600;
+  background:var(--black);color:#fff;padding:2px 7px;border-radius:var(--radius);
+  pointer-events:none;font-family:inherit;
+}
+.cell .check{
+  position:absolute;top:4px;right:4px;width:22px;height:22px;
+  border-radius:50%;border:2px solid rgba(0,0,0,.2);background:rgba(255,255,255,.7);
+  display:flex;align-items:center;justify-content:center;
+  transition:background .15s,border-color .15s;pointer-events:none;
+}
+.cell.selected .check{background:var(--red);border-color:var(--red)}
+.cell .check svg{width:14px;height:14px;opacity:0;transition:opacity .15s}
+.cell.selected .check svg{opacity:1}
+
+/* ---- Overlay / spinner ---- */
+.overlay{
+  position:fixed;inset:0;background:rgba(244,241,236,.85);
+  display:flex;align-items:center;justify-content:center;z-index:100;
+}
+.overlay.hidden{display:none}
+.spinner{
+  width:48px;height:48px;border:4px solid var(--border);
+  border-top-color:var(--red);border-radius:50%;
+  animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---- Modal ---- */
+.modal-backdrop{
+  position:fixed;inset:0;background:rgba(0,0,0,.6);
+  display:flex;align-items:center;justify-content:center;z-index:200;
+}
+.modal-backdrop.hidden{display:none}
+.modal{
+  background:var(--surface);border:2px solid var(--black);border-radius:var(--radius);
+  padding:20px;max-width:90vw;max-height:90vh;display:flex;flex-direction:column;
+  align-items:center;gap:12px;
+}
+.modal img{max-width:80vw;max-height:72vh;border-radius:var(--radius)}
+.modal .modal-actions{display:flex;gap:8px}
+
+/* ---- Responsive ---- */
+@media(max-width:800px){
+  .app-body{flex-direction:column}
+  .sidebar{
+    width:100%;border-right:none;border-bottom:2px solid var(--black);
+    max-height:45vh;flex-shrink:0;
+  }
+  .grid-area{flex:1;min-height:0}
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <h1><span class="red">S</span>uprematis<span class="blue">m</span> <span class="yellow">E</span>volver</h1>
+</header>
+
+<!-- Body: sidebar + grid -->
+<div class="app-body">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+
+    <!-- Generation nav -->
+    <div class="gen-nav">
+      <button class="btn-nav" id="btn-prev" disabled title="Previous generation (Left arrow)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 3L5 8l5 5"/></svg>
+      </button>
+      <div class="gen-badge">Gen <strong id="gen-num">0</strong></div>
+      <button class="btn-nav" id="btn-next" disabled title="Next generation (Right arrow)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 3l5 5-5 5"/></svg>
+      </button>
+    </div>
+
+    <!-- Controls -->
+    <div class="sidebar-section">
+      <div class="section-label">Controls</div>
+      <div class="control-row">
+        <label for="sel-engine">Engine</label>
+        <select id="sel-engine">
+          <option value="shapes" selected>Shapes</option>
+          <option value="cppn">CPPN</option>
+        </select>
+      </div>
+      <div class="control-row cppn-only">
+        <label for="sel-mode">Mode</label>
+        <select id="sel-mode">
+          <option value="malevich" selected>Malevich</option>
+        </select>
+      </div>
+      <div class="control-row cppn-only">
+        <label for="sel-palette">Palette</label>
+        <select id="sel-palette">
+          <option value="none" selected>Full Color</option>
+          <option value="malevich">Suprematist</option>
+        </select>
+      </div>
+      <div class="control-row cppn-only">
+        <label for="sel-color">Color</label>
+        <select id="sel-color">
+          <option value="rgb" selected>RGB</option>
+          <option value="hsv">HSV</option>
+        </select>
+      </div>
+      <div class="control-row">
+        <label for="sl-mutation">Mutation Strength</label>
+        <div class="slider-row">
+          <input type="range" id="sl-mutation" min="0" max="3" step="0.1" value="1">
+          <span class="range-val" id="mutation-val">1.0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="sidebar-section">
+      <div class="section-label">Actions</div>
+      <div class="action-stack">
+        <button class="btn btn-primary" id="btn-evolve" disabled>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 8h12M10 4l4 4-4 4"/></svg>
+          Evolve
+        </button>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="btn-export" disabled>Export</button>
+          <button class="btn btn-secondary" id="btn-export-all">Export All</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="btn-save" disabled>Save</button>
+          <button class="btn btn-danger" id="btn-reset">Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Selection info -->
+    <div class="sidebar-section">
+      <div class="section-label">Selection</div>
+      <span class="selection-info" id="sel-info">Click thumbnails to select parents</span>
+    </div>
+
+    <!-- About -->
+    <div class="sidebar-section" style="margin-top:auto">
+      <div class="section-label">About</div>
+      <p class="about-text">
+        Evolutionary art engine inspired by Kazimir Malevich's Suprematist compositions.
+        Select parents, evolve, repeat.
+      </p>
+    </div>
+
+  </aside>
+
+  <!-- Grid -->
+  <main class="grid-area">
+    <div class="grid" id="grid"></div>
+  </main>
+
+</div>
+
+<!-- Loading overlay -->
+<div class="overlay hidden" id="loading"><div class="spinner"></div></div>
+
+<!-- Hi-res modal -->
+<div class="modal-backdrop hidden" id="modal-backdrop">
+  <div class="modal">
+    <img id="modal-img" src="" alt="Hi-res export">
+    <div class="modal-actions">
+      <a class="btn btn-primary" id="modal-download" download="export.png" href="#">Download</a>
+      <button class="btn btn-secondary" id="modal-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const grid = $('#grid');
+const loading = $('#loading');
+const genNum = $('#gen-num');
+const selInfo = $('#sel-info');
+const btnEvolve = $('#btn-evolve');
+const btnExport = $('#btn-export');
+const btnExportAll = $('#btn-export-all');
+const btnSave = $('#btn-save');
+const btnReset = $('#btn-reset');
+const btnPrev = $('#btn-prev');
+const btnNext = $('#btn-next');
+const selEngine = $('#sel-engine');
+const selMode = $('#sel-mode');
+const selPalette = $('#sel-palette');
+const selColor = $('#sel-color');
+const slMutation = $('#sl-mutation');
+const mutationVal = $('#mutation-val');
+const cppnControls = document.querySelectorAll('.cppn-only');
+const modalBackdrop = $('#modal-backdrop');
+const modalImg = $('#modal-img');
+const modalDownload = $('#modal-download');
+const modalClose = $('#modal-close');
+
+let selected = new Set();
+let thumbnails = [];
+let popSize = 0;
+let currentEngine = 'shapes';
+
+function showLoading(){ loading.classList.remove('hidden'); }
+function hideLoading(){ loading.classList.add('hidden'); }
+
+function updateEngineUI(engine){
+  currentEngine = engine;
+  selEngine.value = engine;
+  cppnControls.forEach(el => el.style.display = engine === 'cppn' ? '' : 'none');
+}
+
+function updateNavUI(data){
+  btnPrev.disabled = !data.has_prev;
+  btnNext.disabled = !data.has_next;
+}
+
+function updateSelectionUI(){
+  const count = selected.size;
+  btnEvolve.disabled = count === 0;
+  const singleSelected = count === 1;
+  btnExport.disabled = !singleSelected;
+  btnSave.disabled = !singleSelected;
+  if(count === 0) selInfo.textContent = 'Click thumbnails to select parents';
+  else selInfo.textContent = `${count} selected: [${[...selected].sort((a,b)=>a-b).join(', ')}]`;
+
+  document.querySelectorAll('.cell').forEach((el,i)=>{
+    el.classList.toggle('selected', selected.has(i));
+  });
+}
+
+function renderGrid(data){
+  genNum.textContent = data.generation;
+  thumbnails = data.thumbnails;
+  popSize = data.pop_size;
+  selected.clear();
+  grid.innerHTML = '';
+
+  if(data.mutation_strength !== undefined){
+    slMutation.value = data.mutation_strength;
+    mutationVal.textContent = Number(data.mutation_strength).toFixed(1);
+  }
+
+  updateNavUI(data);
+
+  data.thumbnails.forEach((b64, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.innerHTML = `
+      <img src="data:image/png;base64,${b64}" alt="Individual ${i}">
+      <span class="idx">${i}</span>
+      <span class="check">
+        <svg viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3,8 7,12 13,4"/>
+        </svg>
+      </span>`;
+    cell.addEventListener('click', () => {
+      if(selected.has(i)) selected.delete(i); else selected.add(i);
+      updateSelectionUI();
+    });
+    grid.appendChild(cell);
+  });
+
+  updateSelectionUI();
+}
+
+async function apiFetch(url, body){
+  showLoading();
+  try{
+    const opts = body !== undefined
+      ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }
+      : {};
+    const res = await fetch(url, opts);
+    return await res.json();
+  } finally { hideLoading(); }
+}
+
+async function loadState(){
+  const data = await apiFetch('/api/state');
+  updateEngineUI(data.engine || 'shapes');
+  selMode.value = data.mode;
+  selPalette.value = data.palette;
+  selColor.value = data.color_mode;
+  renderGrid(data);
+}
+
+slMutation.addEventListener('input', () => {
+  mutationVal.textContent = Number(slMutation.value).toFixed(1);
+});
+
+slMutation.addEventListener('change', async () => {
+  await apiFetch('/api/mutation_strength', { mutation_strength: parseFloat(slMutation.value) });
+});
+
+btnPrev.addEventListener('click', async () => {
+  const data = await apiFetch('/api/prev', {});
+  renderGrid(data);
+});
+
+btnNext.addEventListener('click', async () => {
+  const data = await apiFetch('/api/next', {});
+  renderGrid(data);
+});
+
+btnEvolve.addEventListener('click', async ()=>{
+  const data = await apiFetch('/api/evolve', { selected: [...selected] });
+  renderGrid(data);
+});
+
+btnExport.addEventListener('click', async ()=>{
+  const idx = [...selected][0];
+  const data = await apiFetch('/api/export', { index: idx });
+  const src = 'data:image/png;base64,' + data.image;
+  modalImg.src = src;
+  modalDownload.href = src;
+  modalDownload.download = `hires_${genNum.textContent.padStart(4,'0')}_${String(idx).padStart(2,'0')}.png`;
+  modalBackdrop.classList.remove('hidden');
+});
+
+btnExportAll.addEventListener('click', async () => {
+  showLoading();
+  try {
+    const res = await fetch('/api/export_all');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gen${genNum.textContent.padStart(4,'0')}_all.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } finally { hideLoading(); }
+});
+
+btnSave.addEventListener('click', async ()=>{
+  const idx = [...selected][0];
+  const data = await apiFetch('/api/save', { index: idx });
+  selInfo.textContent = `Genome saved: ${data.path}`;
+});
+
+btnReset.addEventListener('click', async ()=>{
+  const data = await apiFetch('/api/reset', {
+    engine: selEngine.value,
+    mode: selMode.value,
+    palette: selPalette.value,
+    color_mode: selColor.value,
+    pop_size: 20,
+    mutation_strength: parseFloat(slMutation.value)
+  });
+  updateEngineUI(data.engine || selEngine.value);
+  renderGrid(data);
+});
+
+selEngine.addEventListener('change', ()=> updateEngineUI(selEngine.value));
+
+modalClose.addEventListener('click', ()=> modalBackdrop.classList.add('hidden'));
+modalBackdrop.addEventListener('click', e => {
+  if(e.target === modalBackdrop) modalBackdrop.classList.add('hidden');
+});
+
+document.addEventListener('keydown', e => {
+  if(e.key === 'Enter' && !btnEvolve.disabled && loading.classList.contains('hidden')){
+    btnEvolve.click();
+  }
+  if(e.key === 'Escape'){
+    modalBackdrop.classList.add('hidden');
+  }
+  if(e.key === 'ArrowLeft' && !btnPrev.disabled && loading.classList.contains('hidden')){
+    btnPrev.click();
+  }
+  if(e.key === 'ArrowRight' && !btnNext.disabled && loading.classList.contains('hidden')){
+    btnNext.click();
+  }
+});
+
+loadState();
+</script>
+</body>
+</html>
