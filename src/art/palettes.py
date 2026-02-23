@@ -70,11 +70,28 @@ HYBRID_PALETTE = {
     "brown": hex_to_rgb("#8B4513"),
 }
 
+# --- Hadid Palette ---
+# Inspired by Zaha Hadid's suprematist-influenced paintings (1976-1992)
+# "The Peak", "Malevich's Tektonik", "The World (89 Degrees)"
+HADID_PALETTE = {
+    "white":       hex_to_rgb("#F0F0F0"),
+    "light_grey":  hex_to_rgb("#C8C8C8"),
+    "mid_grey":    hex_to_rgb("#888888"),
+    "dark_grey":   hex_to_rgb("#404040"),
+    "black":       hex_to_rgb("#0A0A0A"),
+    "deep_blue":   hex_to_rgb("#0B2366"),
+    "royal_blue":  hex_to_rgb("#1A4FA0"),
+    "red":         hex_to_rgb("#C62828"),
+    "amber":       hex_to_rgb("#C49B2A"),
+    "cream":       hex_to_rgb("#E8DCC8"),
+}
+
 PALETTES = {
     "malevich": MALEVICH_PALETTE,
     "suprematist": SUPREMATIST_PALETTE,
     "basquiat": BASQUIAT_PALETTE,
     "hybrid": HYBRID_PALETTE,
+    "hadid": HADID_PALETTE,
     "none": None,
 }
 

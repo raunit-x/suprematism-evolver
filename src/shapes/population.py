@@ -14,6 +14,7 @@ from pathlib import Path
 from src.shapes.genome import (
     ShapeGenome,
     create_random,
+    create_architecton,
     crossover,
     mutate,
 )
@@ -39,6 +40,14 @@ class ShapePopulation:
     def initialize(self) -> None:
         self.genomes = [
             create_random(self.num_palette_colors)
+            for _ in range(self.pop_size)
+        ]
+        self.generation = 0
+
+    def initialize_architecton(self) -> None:
+        """Initialize population with Hadid-style architecton genomes."""
+        self.genomes = [
+            create_architecton(self.num_palette_colors)
             for _ in range(self.pop_size)
         ]
         self.generation = 0

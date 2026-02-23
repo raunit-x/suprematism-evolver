@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from src.neat.population import Population
 from src.cppn.renderer import render_to_image
-from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE
+from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE, HADID_PALETTE
 from src.art.fitness import compute_style_fitness
 from src.cppn.activations import MALEVICH_ACTIVATIONS, ALL_ACTIVATIONS
 
@@ -66,7 +66,7 @@ class AppState:
         self.mode: str = "malevich"
         self.palette: str = "none"
         self.color_mode: str = "rgb"
-        self.pop_size: int = 20
+        self.pop_size: int = 24
         self.thumb_size: int = 320
         self.hires_size: int = 2048
         self.mutation_strength: float = 1.0
@@ -106,12 +106,15 @@ class AppState:
     # ---- Shape helpers ----
 
     def _shape_palette(self) -> list[tuple]:
+        if self.engine == "hadid":
+            return list(HADID_PALETTE.values())
         return list(SUPREMATIST_PALETTE.values())
 
     def _build_shape_config(self) -> dict:
+        pal = HADID_PALETTE if self.engine == "hadid" else SUPREMATIST_PALETTE
         return {
             "pop_size": self.pop_size,
-            "num_palette_colors": len(SUPREMATIST_PALETTE),
+            "num_palette_colors": len(pal),
             "elitism": 2,
             "crossover_rate": 0.7,
             "tournament_k": 3,
@@ -121,9 +124,12 @@ class AppState:
     # ---- Initialization ----
 
     def initialize(self):
-        if self.engine == "shapes":
+        if self.engine in ("shapes", "hadid"):
             self.shape_pop = ShapePopulation(self._build_shape_config())
-            self.shape_pop.initialize()
+            if self.engine == "hadid":
+                self.shape_pop.initialize_architecton()
+            else:
+                self.shape_pop.initialize()
             self.pop = None
             self._networks = []
         else:
@@ -156,7 +162,7 @@ class AppState:
         self._history_idx = idx
         self._cached_thumbnails = list(snap.thumbnails)
 
-        if self.engine == "shapes" and self.shape_pop:
+        if self.engine in ("shapes", "hadid") and self.shape_pop:
             self.shape_pop.genomes = [g.copy() for g in snap.genomes]
             self.shape_pop.generation = snap.generation
 
@@ -179,7 +185,7 @@ class AppState:
     def _render_thumbnails(self):
         self._cached_thumbnails = []
 
-        if self.engine == "shapes":
+        if self.engine in ("shapes", "hadid"):
             palette = self._shape_palette()
             for genome in self.shape_pop.genomes:
                 img = render_genome(genome, self.thumb_size, self.thumb_size, palette)
@@ -194,12 +200,12 @@ class AppState:
     # ---- State payload ----
 
     def _current_genomes(self) -> list:
-        if self.engine == "shapes":
+        if self.engine in ("shapes", "hadid"):
             return self.shape_pop.genomes
         return self.pop.genomes
 
     def _current_generation(self) -> int:
-        if self.engine == "shapes":
+        if self.engine in ("shapes", "hadid"):
             return self.shape_pop.generation
         return self.pop.generation
 
@@ -221,7 +227,7 @@ class AppState:
     # ---- Evolve ----
 
     def evolve(self, selected: list[int]):
-        if self.engine == "shapes":
+        if self.engine in ("shapes", "hadid"):
             self.shape_pop.mutation_strength = self.mutation_strength
             self.shape_pop.evolve_with_selection(selected)
         else:
@@ -252,7 +258,7 @@ class AppState:
         OUTPUT_DIR.mkdir(exist_ok=True)
         gen = self._current_generation()
 
-        if self.engine == "shapes":
+        if self.engine in ("shapes", "hadid"):
             palette = self._shape_palette()
             genome = self.shape_pop.genomes[index]
             img = render_genome(genome, self.hires_size, self.hires_size, palette)
@@ -273,7 +279,7 @@ class AppState:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             genomes = self._current_genomes()
             for i, genome in enumerate(genomes):
-                if self.engine == "shapes":
+                if self.engine in ("shapes", "hadid"):
                     palette = self._shape_palette()
                     img = render_genome(genome, resolution, resolution, palette)
                 else:
@@ -295,7 +301,7 @@ class AppState:
         gen = self._current_generation()
         path = OUTPUT_DIR / f"genome_{gen:04d}_{index:02d}.json"
 
-        if self.engine == "shapes":
+        if self.engine in ("shapes", "hadid"):
             self.shape_pop.save_genome(index, path)
         else:
             self.pop.save_genome(index, path)
@@ -327,7 +333,7 @@ class ResetRequest(BaseModel):
     mode: str = "malevich"
     palette: str = "none"
     color_mode: str = "rgb"
-    pop_size: int = 20
+    pop_size: int = 24
     mutation_strength: float = 1.0
 
 class MutationRequest(BaseModel):
@@ -340,7 +346,7 @@ class MutationRequest(BaseModel):
 
 @app.get("/api/state")
 def api_state():
-    if state.engine == "shapes" and state.shape_pop is None:
+    if state.engine in ("shapes", "hadid") and state.shape_pop is None:
         state.initialize()
     elif state.engine == "cppn" and state.pop is None:
         state.initialize()
@@ -349,7 +355,7 @@ def api_state():
 
 @app.post("/api/evolve")
 def api_evolve(req: EvolveRequest):
-    if state.engine == "shapes" and state.shape_pop is None:
+    if state.engine in ("shapes", "hadid") and state.shape_pop is None:
         state.initialize()
     elif state.engine == "cppn" and state.pop is None:
         state.initialize()
@@ -408,7 +414,7 @@ def api_reset(req: ResetRequest):
 @app.post("/api/mutation_strength")
 def api_mutation_strength(req: MutationRequest):
     state.mutation_strength = max(0.0, min(3.0, req.mutation_strength))
-    if state.engine == "shapes" and state.shape_pop:
+    if state.engine in ("shapes", "hadid") and state.shape_pop:
         state.shape_pop.mutation_strength = state.mutation_strength
     return JSONResponse({"mutation_strength": state.mutation_strength})
 

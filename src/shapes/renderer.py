@@ -122,6 +122,160 @@ _SHAPE_DRAWERS = {
 
 
 # ------------------------------------------------------------------
+# 3D projection helpers (Hadid / Architecton mode)
+# ------------------------------------------------------------------
+
+def _lighten(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+    """Lighten a color by mixing toward white."""
+    return (
+        int(rgb[0] + (255 - rgb[0]) * factor),
+        int(rgb[1] + (255 - rgb[1]) * factor),
+        int(rgb[2] + (255 - rgb[2]) * factor),
+    )
+
+
+def _darken(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+    """Darken a color by mixing toward black."""
+    return (
+        int(rgb[0] * (1 - factor)),
+        int(rgb[1] * (1 - factor)),
+        int(rgb[2] * (1 - factor)),
+    )
+
+
+def _render_cuboid_layer(shape: Shape, width: int, height: int,
+                          palette: list[tuple],
+                          proj_angle: float,
+                          proj_strength: float) -> Image.Image:
+    """Render a shape as an oblique-projected 3D cuboid with face shading.
+
+    Three faces are drawn: side face (darkest), top/bottom cap (lightest),
+    and front face (base color).  Thin edge lines add architectural detail.
+    """
+    rgb = _palette_rgb(palette, shape.color_idx)
+    alpha = int(shape.opacity * 255)
+
+    front_color = rgb + (alpha,)
+    top_color = _lighten(rgb, 0.30) + (alpha,)
+    side_color = _darken(rgb, 0.25) + (alpha,)
+    edge_color = _darken(rgb, 0.50) + (min(255, alpha + 20),)
+
+    # Projection vectors (pixels per unit)
+    proj_rad = math.radians(proj_angle)
+    scale = min(width, height) * proj_strength
+
+    depth_dx = shape.depth * scale * math.cos(proj_rad)
+    depth_dy = -shape.depth * scale * math.sin(proj_rad)
+
+    elev_dx = shape.elevation * scale * math.cos(proj_rad)
+    elev_dy = -shape.elevation * scale * math.sin(proj_rad)
+
+    # Front face dimensions and center (with elevation offset)
+    pw = max(1, int(shape.w * width))
+    ph = max(1, int(shape.h * height))
+    cx = shape.x * width + elev_dx
+    cy = shape.y * height + elev_dy
+
+    # Front face corner offsets from center
+    hw, hh = pw / 2.0, ph / 2.0
+    local_corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]  # TL TR BR BL
+
+    # Apply rotation around center
+    rad = math.radians(shape.rotation)
+    cos_r, sin_r = math.cos(rad), math.sin(rad)
+
+    front = []
+    for lx, ly in local_corners:
+        front.append((lx * cos_r - ly * sin_r + cx,
+                       lx * sin_r + ly * cos_r + cy))
+
+    # Back face = front displaced by depth projection
+    back = [(x + depth_dx, y + depth_dy) for x, y in front]
+
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+
+    def _ipoly(pts):
+        return [tuple(map(int, p)) for p in pts]
+
+    if shape.depth > 0.002:
+        # Top or bottom cap face
+        if depth_dy <= 0:  # projection goes upward -> top face visible
+            cap = [front[0], front[1], back[1], back[0]]
+        else:
+            cap = [front[3], front[2], back[2], back[3]]
+        draw.polygon(_ipoly(cap), fill=top_color)
+
+        # Side face (left or right depending on projection direction)
+        if depth_dx >= 0:  # projection goes rightward -> right side visible
+            side = [front[1], front[2], back[2], back[1]]
+        else:
+            side = [front[0], front[3], back[3], back[0]]
+        draw.polygon(_ipoly(side), fill=side_color)
+
+        # Architectural edge lines
+        for face in (cap, side):
+            pts = _ipoly(face)
+            for i in range(len(pts)):
+                draw.line([pts[i], pts[(i + 1) % len(pts)]],
+                          fill=edge_color, width=1)
+
+    # Front face (always visible, drawn last)
+    front_pts = _ipoly(front)
+    draw.polygon(front_pts, fill=front_color)
+
+    if shape.depth > 0.002:
+        for i in range(len(front_pts)):
+            draw.line([front_pts[i], front_pts[(i + 1) % len(front_pts)]],
+                      fill=edge_color, width=1)
+
+    return layer
+
+
+def _render_background_fields(canvas: Image.Image,
+                               genome: ShapeGenome,
+                               palette: list[tuple]) -> None:
+    """Render large diagonal color fields for dramatic Hadid-style background.
+
+    Creates a bold geometric split between the main background color and
+    a contrasting field, using the projection angle for visual harmony.
+    """
+    w, h = canvas.size
+    draw = ImageDraw.Draw(canvas)
+
+    # Field dividing angle harmonised with the projection
+    field_angle = math.radians(genome.projection_angle * 1.5 + 20)
+    cos_a = math.cos(field_angle)
+    sin_a = math.sin(field_angle)
+
+    # Pivot roughly at lower-left third of canvas
+    px = w * 0.33
+    py = h * 0.55
+
+    # Extend dividing line well past canvas edges
+    ext = float(max(w, h)) * 2.0
+    la = (px + cos_a * ext, py - sin_a * ext)
+    lb = (px - cos_a * ext, py + sin_a * ext)
+
+    # Perpendicular offset to create half-plane polygon
+    perp_x, perp_y = -sin_a, -cos_a
+    off = float(max(w, h)) * 2.0
+    lc = (lb[0] + perp_x * off, lb[1] + perp_y * off)
+    ld = (la[0] + perp_x * off, la[1] + perp_y * off)
+
+    # Choose contrasting secondary color
+    bg_idx = genome.bg_color_idx
+    n = len(palette)
+    sec_idx = 0  # white / lightest
+    if sec_idx == bg_idx and n > 1:
+        sec_idx = min(n - 1, bg_idx + 1)
+    sec_rgb = _palette_rgb(palette, sec_idx)
+
+    poly = [tuple(map(int, p)) for p in [la, lb, lc, ld]]
+    draw.polygon(poly, fill=sec_rgb + (255,))
+
+
+# ------------------------------------------------------------------
 # Canvas fiber texture
 #
 # Generates a tileable greyscale texture of fine scratches / fibers
@@ -285,6 +439,10 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
     if palette is None:
         palette = DEFAULT_PALETTE
 
+    # Dispatch to 3D renderer when projection is active
+    if genome.projection_strength > 0.01:
+        return _render_genome_3d(genome, width, height, palette)
+
     iw = width * _SUPERSAMPLE
     ih = height * _SUPERSAMPLE
 
@@ -297,6 +455,44 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
 
     result = canvas.convert("RGB")
     result = _apply_canvas_texture(result, strength=14.0)
+
+    if _SUPERSAMPLE > 1:
+        result = result.resize((width, height), Image.LANCZOS)
+
+    return result
+
+
+def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
+                       palette: list[tuple]) -> Image.Image:
+    """Render genome with oblique 3D projection (Hadid / Architecton style).
+
+    Shapes are sorted by elevation (painter's algorithm) and rendered
+    as cuboids with face shading and architectural edge lines.
+    """
+    iw = width * _SUPERSAMPLE
+    ih = height * _SUPERSAMPLE
+
+    bg_rgb = _palette_rgb(palette, genome.bg_color_idx)
+    canvas = Image.new("RGBA", (iw, ih), bg_rgb + (255,))
+
+    # Dramatic diagonal background fields
+    _render_background_fields(canvas, genome, palette)
+
+    # Collect all shapes and sort by elevation (ascending = back to front)
+    all_shapes = genome.flatten()
+    all_shapes.sort(key=lambda s: s.elevation)
+
+    for shape in all_shapes:
+        layer = _render_cuboid_layer(
+            shape, iw, ih, palette,
+            genome.projection_angle,
+            genome.projection_strength,
+        )
+        canvas = Image.alpha_composite(canvas, layer)
+
+    result = canvas.convert("RGB")
+    # Subtle canvas texture (lighter than flat mode for cleaner architectural look)
+    result = _apply_canvas_texture(result, strength=6.0)
 
     if _SUPERSAMPLE > 1:
         result = result.resize((width, height), Image.LANCZOS)

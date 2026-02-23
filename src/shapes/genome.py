@@ -80,19 +80,27 @@ class Shape:
     rotation: float
     color_idx: int
     opacity: float = 1.0
+    depth: float = 0.0       # 3D cuboid depth (0 = flat 2D shape)
+    elevation: float = 0.0   # Height in 3D stack
 
     def copy(self) -> Shape:
         return Shape(
             self.kind, self.x, self.y, self.w, self.h,
             self.rotation, self.color_idx, self.opacity,
+            self.depth, self.elevation,
         )
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "kind": self.kind, "x": self.x, "y": self.y,
             "w": self.w, "h": self.h, "rotation": self.rotation,
             "color_idx": self.color_idx, "opacity": self.opacity,
         }
+        if self.depth > 0:
+            d["depth"] = self.depth
+        if self.elevation > 0:
+            d["elevation"] = self.elevation
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> Shape:
@@ -100,6 +108,7 @@ class Shape:
             kind=d["kind"], x=d["x"], y=d["y"],
             w=d["w"], h=d["h"], rotation=d["rotation"],
             color_idx=d["color_idx"], opacity=d.get("opacity", 1.0),
+            depth=d.get("depth", 0.0), elevation=d.get("elevation", 0.0),
         )
 
 
@@ -152,6 +161,8 @@ class ShapeGenome:
     satellites: list[Shape] = field(default_factory=list)
     bg_color_idx: int = 0
     fitness: float = 0.0
+    projection_angle: float = 30.0     # Oblique projection slant angle (degrees)
+    projection_strength: float = 0.0   # Depth projection scale (0 = flat 2D)
 
     def flatten(self) -> list[Shape]:
         """Return all shapes in rendering order (back-to-front)."""
@@ -174,14 +185,20 @@ class ShapeGenome:
             satellites=[s.copy() for s in self.satellites],
             bg_color_idx=self.bg_color_idx,
             fitness=0.0,
+            projection_angle=self.projection_angle,
+            projection_strength=self.projection_strength,
         )
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "bg_color_idx": self.bg_color_idx,
             "groups": [g.to_dict() for g in self.groups],
             "satellites": [s.to_dict() for s in self.satellites],
         }
+        if self.projection_strength > 0:
+            d["projection_angle"] = self.projection_angle
+            d["projection_strength"] = self.projection_strength
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> ShapeGenome:
@@ -189,7 +206,9 @@ class ShapeGenome:
             groups = [ShapeGroup.from_dict(g) for g in d["groups"]]
             sats = [Shape.from_dict(s) for s in d.get("satellites", [])]
             return cls(groups=groups, satellites=sats,
-                       bg_color_idx=d.get("bg_color_idx", 0))
+                       bg_color_idx=d.get("bg_color_idx", 0),
+                       projection_angle=d.get("projection_angle", 30.0),
+                       projection_strength=d.get("projection_strength", 0.0))
         # Backward compat: old flat format with "shapes" key
         shapes = [Shape.from_dict(s) for s in d.get("shapes", [])]
         if not shapes:
@@ -455,6 +474,10 @@ MUTATION_RATES = {
     # Satellites
     "add_satellite": 0.08,
     "remove_satellite": 0.05,
+    # 3D depth / projection (Hadid mode)
+    "perturb_depth": 0.15,
+    "perturb_elevation": 0.10,
+    "perturb_projection": 0.05,
 }
 
 
@@ -585,6 +608,25 @@ def mutate(genome: ShapeGenome, num_palette_colors: int = 16,
     if random.random() < _rate("remove_satellite") and sats:
         sats.pop(random.randrange(len(sats)))
 
+    # ------ 3D depth / projection (active when projection_strength > 0) ------
+
+    if genome.projection_strength > 0.01:
+        if s and random.random() < _rate("perturb_depth"):
+            s.depth = max(0.0, s.depth + random.gauss(0, 0.015))
+
+        if s and random.random() < _rate("perturb_elevation"):
+            s.elevation = max(0.0, s.elevation + random.gauss(0, 0.012))
+
+        if random.random() < _rate("perturb_projection"):
+            genome.projection_angle = _clamp(
+                genome.projection_angle + random.gauss(0, 3), 10, 70,
+            )
+            if random.random() < 0.3:
+                genome.projection_strength = _clamp(
+                    genome.projection_strength + random.gauss(0, 0.04),
+                    0.1, 0.8,
+                )
+
     for shape in genome.flatten():
         _ensure_inside(shape)
 
@@ -635,7 +677,163 @@ def crossover(parent_a: ShapeGenome, parent_b: ShapeGenome) -> ShapeGenome:
             child_sats.append(parent_b.satellites[i].copy())
 
     bg = parent_a.bg_color_idx if random.random() < 0.5 else parent_b.bg_color_idx
-    child = ShapeGenome(groups=child_groups, satellites=child_sats, bg_color_idx=bg)
+    proj_angle = parent_a.projection_angle if random.random() < 0.5 else parent_b.projection_angle
+    proj_strength = parent_a.projection_strength if random.random() < 0.5 else parent_b.projection_strength
+    child = ShapeGenome(
+        groups=child_groups, satellites=child_sats, bg_color_idx=bg,
+        projection_angle=proj_angle, projection_strength=proj_strength,
+    )
     for shape in child.flatten():
         _ensure_inside(shape)
     return child
+
+
+# ======================================================================
+# Architecton creation (Hadid / Malevich 3D mode)
+# ======================================================================
+
+def create_architecton(num_palette_colors: int = 10) -> ShapeGenome:
+    """Create a Hadid-style architecton: hierarchical cuboid stack.
+
+    Inspired by Malevich's Arkhitekton plaster models and Zaha Hadid's
+    reinterpretation as oblique-projected suprematist paintings.
+    Cuboids are stacked vertically with horizontal arm extensions,
+    projected at a consistent oblique angle.
+    """
+    n_levels = random.randint(3, 6)
+    base_w = random.uniform(0.20, 0.45)
+    level_h = random.uniform(0.025, 0.050)
+    level_depth = random.uniform(0.04, 0.09)
+    shrink = random.uniform(0.12, 0.22)
+
+    cx = random.uniform(0.30, 0.70)
+    cy = random.uniform(0.40, 0.65)
+    main_angle = random.uniform(-12, 12)
+
+    proj_angle = random.choice([25, 30, 35, 40, 45])
+    proj_strength = random.uniform(0.35, 0.60)
+
+    palette_size = min(num_palette_colors, random.randint(3, 5))
+    sub_indices = random.sample(range(num_palette_colors), palette_size)
+
+    shapes: list[Shape] = []
+    current_elevation = 0.0
+
+    # --- Main vertical stack ---
+    for level in range(n_levels):
+        scale = max(0.3, 1.0 - level * shrink)
+        w = max(0.04, base_w * scale * random.uniform(0.9, 1.1))
+        h = level_h * random.uniform(0.8, 1.2)
+        d = level_depth * random.uniform(0.85, 1.0)
+        offset_x = random.gauss(0, 0.012)
+
+        s = Shape(
+            kind="rect",
+            x=_clamp01(cx + offset_x), y=cy,
+            w=w, h=h,
+            rotation=main_angle + random.gauss(0, 2),
+            color_idx=random.choice(sub_indices),
+            depth=d, elevation=current_elevation,
+        )
+        _ensure_inside(s)
+        shapes.append(s)
+        current_elevation += d * 0.9
+
+    # --- Horizontal arm extensions ---
+    n_arms = random.randint(2, 5)
+    for _ in range(n_arms):
+        arm_idx = random.randint(0, len(shapes) - 1)
+        arm_base = shapes[arm_idx]
+
+        arm_w = random.uniform(0.04, 0.16)
+        arm_h = level_h * random.uniform(0.6, 1.0)
+        arm_d = level_depth * random.uniform(0.4, 0.8)
+
+        side = random.choice([-1, 1])
+        arm_x = arm_base.x + side * (arm_base.w / 2 + arm_w / 2) * random.uniform(0.8, 1.1)
+
+        arm = Shape(
+            kind="rect",
+            x=_clamp01(arm_x), y=cy,
+            w=arm_w, h=arm_h,
+            rotation=main_angle + random.gauss(0, 3),
+            color_idx=random.choice(sub_indices),
+            depth=arm_d, elevation=arm_base.elevation,
+        )
+        _ensure_inside(arm)
+        shapes.append(arm)
+
+    # --- Small blocks on top of some arms ---
+    arm_shapes = list(shapes[n_levels:])
+    for arm in arm_shapes:
+        if random.random() < 0.35:
+            small = Shape(
+                kind="rect",
+                x=_clamp01(arm.x + random.gauss(0, 0.008)), y=cy,
+                w=arm.w * random.uniform(0.35, 0.65),
+                h=arm.h * random.uniform(0.6, 1.0),
+                rotation=main_angle + random.gauss(0, 2),
+                color_idx=random.choice(sub_indices),
+                depth=arm.depth * 0.5,
+                elevation=arm.elevation + arm.depth,
+            )
+            _ensure_inside(small)
+            shapes.append(small)
+
+    anchor = shapes[0]
+    members = shapes[1:]
+    group = ShapeGroup(anchor=anchor, members=members, cx=cx, cy=cy, angle=main_angle)
+    groups: list[ShapeGroup] = [group]
+
+    # --- Optional second smaller architecton ---
+    if random.random() < 0.25:
+        cx2 = _clamp01(1.0 - cx + random.gauss(0, 0.1))
+        cy2 = _clamp01(cy + random.gauss(0, 0.1))
+        small_levels = random.randint(2, 3)
+        small_shapes: list[Shape] = []
+        elev2 = 0.0
+        for lv in range(small_levels):
+            sc = max(0.3, 1.0 - lv * shrink * 1.3)
+            s2 = Shape(
+                kind="rect", x=cx2, y=cy2,
+                w=base_w * 0.5 * sc,
+                h=level_h * random.uniform(0.8, 1.0),
+                rotation=main_angle + random.gauss(0, 5),
+                color_idx=random.choice(sub_indices),
+                depth=level_depth * 0.7,
+                elevation=elev2,
+            )
+            _ensure_inside(s2)
+            small_shapes.append(s2)
+            elev2 += level_depth * 0.7 * 0.9
+        if small_shapes:
+            groups.append(ShapeGroup(
+                anchor=small_shapes[0], members=small_shapes[1:],
+                cx=cx2, cy=cy2, angle=main_angle,
+            ))
+
+    # --- Floating satellite fragments ---
+    n_sats = random.randint(0, 3)
+    satellites: list[Shape] = []
+    for _ in range(n_sats):
+        sat = Shape(
+            kind=random.choice(("rect", "square", "line")),
+            x=random.random(), y=random.random(),
+            w=random.uniform(0.02, 0.07),
+            h=random.uniform(0.01, 0.03),
+            rotation=main_angle + random.gauss(0, 15),
+            color_idx=random.choice(sub_indices),
+            depth=random.uniform(0.01, 0.03),
+            elevation=random.uniform(0.0, 0.08),
+        )
+        _ensure_inside(sat)
+        satellites.append(sat)
+
+    bg_idx = 5 if num_palette_colors > 5 else 0
+
+    return ShapeGenome(
+        groups=groups, satellites=satellites,
+        bg_color_idx=bg_idx,
+        projection_angle=proj_angle,
+        projection_strength=proj_strength,
+    )
