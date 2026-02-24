@@ -74,16 +74,17 @@ HYBRID_PALETTE = {
 # Inspired by Zaha Hadid's suprematist-influenced paintings (1976-1992)
 # "The Peak", "Malevich's Tektonik", "The World (89 Degrees)"
 HADID_PALETTE = {
-    "white":       hex_to_rgb("#F0F0F0"),
-    "light_grey":  hex_to_rgb("#C8C8C8"),
-    "mid_grey":    hex_to_rgb("#888888"),
-    "dark_grey":   hex_to_rgb("#404040"),
-    "black":       hex_to_rgb("#0A0A0A"),
-    "deep_blue":   hex_to_rgb("#0B2366"),
-    "royal_blue":  hex_to_rgb("#1A4FA0"),
-    "red":         hex_to_rgb("#C62828"),
-    "amber":       hex_to_rgb("#C49B2A"),
-    "cream":       hex_to_rgb("#E8DCC8"),
+    "white":         hex_to_rgb("#F5F5F7"),
+    "warm_white":    hex_to_rgb("#EDE8DE"),
+    "light_grey":    hex_to_rgb("#C7C8CD"),
+    "mid_grey":      hex_to_rgb("#8C8A92"),
+    "graphite":      hex_to_rgb("#4A4950"),
+    "black":         hex_to_rgb("#0B0B10"),
+    "deep_blue":     hex_to_rgb("#0B2465"),
+    "cobalt_blue":   hex_to_rgb("#2059BA"),
+    "signal_red":    hex_to_rgb("#CF2E2E"),
+    "ochre_yellow":  hex_to_rgb("#D5B143"),
+    "pale_blue":     hex_to_rgb("#AFC0DC"),
 }
 
 PALETTES = {

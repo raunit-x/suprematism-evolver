@@ -31,6 +31,7 @@ from src.cppn.activations import MALEVICH_ACTIVATIONS, ALL_ACTIVATIONS
 
 from src.shapes.population import ShapePopulation
 from src.shapes.renderer import render_genome
+import src.shapes.renderer as _shape_renderer
 
 OUTPUT_DIR = Path("output")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -70,12 +71,16 @@ class AppState:
         self.thumb_size: int = 320
         self.hires_size: int = 2048
         self.mutation_strength: float = 1.0
+        self.crossover_rate: float = 0.7
+        self.grain_strength: float = 8.0
+        self.gradient_strength: float = 10.0
         self._cached_thumbnails: list[str] = []
         self._networks = []
 
         self._history: list[_GenerationSnapshot] = []
         self._history_idx: int = -1
         self._max_history: int = 200
+        self._home_samples_cache: dict[str, list[str]] | None = None
 
     # ---- CPPN helpers ----
 
@@ -116,7 +121,7 @@ class AppState:
             "pop_size": self.pop_size,
             "num_palette_colors": len(pal),
             "elitism": 2,
-            "crossover_rate": 0.7,
+            "crossover_rate": self.crossover_rate,
             "tournament_k": 3,
             "mutation_strength": self.mutation_strength,
         }
@@ -182,8 +187,13 @@ class AppState:
 
     # ---- Thumbnails ----
 
+    def _sync_render_settings(self):
+        _shape_renderer.GRAIN_STRENGTH = self.grain_strength
+        _shape_renderer.GRADIENT_STRENGTH = self.gradient_strength
+
     def _render_thumbnails(self):
         self._cached_thumbnails = []
+        self._sync_render_settings()
 
         if self.engine in ("shapes", "hadid"):
             palette = self._shape_palette()
@@ -196,6 +206,39 @@ class AppState:
             for net in self._networks:
                 img = render_to_image(net, self.thumb_size, self.thumb_size, self.color_mode, palette_array)
                 self._cached_thumbnails.append(_image_to_base64(img))
+
+    def _render_home_style_samples(self, style: str, count: int = 6, size: int = 280) -> list[str]:
+        """Generate a small gallery for the Home page without mutating live state."""
+        style = "hadid" if style == "hadid" else "shapes"
+        palette = list(HADID_PALETTE.values()) if style == "hadid" else list(SUPREMATIST_PALETTE.values())
+
+        config = {
+            "pop_size": count,
+            "num_palette_colors": len(palette),
+            "elitism": 2,
+            "crossover_rate": self.crossover_rate,
+            "tournament_k": 3,
+            "mutation_strength": self.mutation_strength,
+        }
+        demo_pop = ShapePopulation(config)
+        if style == "hadid":
+            demo_pop.initialize_architecton()
+        else:
+            demo_pop.initialize()
+
+        self._sync_render_settings()
+        return [
+            _image_to_base64(render_genome(genome, size, size, palette))
+            for genome in demo_pop.genomes[:count]
+        ]
+
+    def get_home_samples(self, refresh: bool = False) -> dict[str, list[str]]:
+        if self._home_samples_cache is None or refresh:
+            self._home_samples_cache = {
+                "malevich": self._render_home_style_samples("shapes"),
+                "hadid": self._render_home_style_samples("hadid"),
+            }
+        return self._home_samples_cache
 
     # ---- State payload ----
 
@@ -219,6 +262,9 @@ class AppState:
             "color_mode": self.color_mode,
             "thumb_size": self.thumb_size,
             "mutation_strength": self.mutation_strength,
+            "crossover_rate": self.crossover_rate,
+            "grain_strength": self.grain_strength,
+            "gradient_strength": self.gradient_strength,
             "thumbnails": self._cached_thumbnails,
             "has_prev": self.can_go_prev(),
             "has_next": self.can_go_next(),
@@ -335,9 +381,13 @@ class ResetRequest(BaseModel):
     color_mode: str = "rgb"
     pop_size: int = 24
     mutation_strength: float = 1.0
+    crossover_rate: float = 0.7
 
-class MutationRequest(BaseModel):
-    mutation_strength: float = 1.0
+class SettingsRequest(BaseModel):
+    mutation_strength: float | None = None
+    crossover_rate: float | None = None
+    grain_strength: float | None = None
+    gradient_strength: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -407,16 +457,40 @@ def api_reset(req: ResetRequest):
     state.color_mode = req.color_mode
     state.pop_size = req.pop_size
     state.mutation_strength = req.mutation_strength
+    state.crossover_rate = req.crossover_rate
     state.initialize()
     return JSONResponse(state.get_state_payload())
 
 
-@app.post("/api/mutation_strength")
-def api_mutation_strength(req: MutationRequest):
-    state.mutation_strength = max(0.0, min(3.0, req.mutation_strength))
-    if state.engine in ("shapes", "hadid") and state.shape_pop:
-        state.shape_pop.mutation_strength = state.mutation_strength
-    return JSONResponse({"mutation_strength": state.mutation_strength})
+@app.post("/api/settings")
+def api_settings(req: SettingsRequest):
+    """Update any combination of tunable parameters."""
+    rerender = False
+    if req.mutation_strength is not None:
+        state.mutation_strength = max(0.0, min(3.0, req.mutation_strength))
+        if state.engine in ("shapes", "hadid") and state.shape_pop:
+            state.shape_pop.mutation_strength = state.mutation_strength
+    if req.crossover_rate is not None:
+        state.crossover_rate = max(0.0, min(1.0, req.crossover_rate))
+        if state.engine in ("shapes", "hadid") and state.shape_pop:
+            state.shape_pop.crossover_rate = state.crossover_rate
+    if req.grain_strength is not None:
+        state.grain_strength = max(0.0, min(30.0, req.grain_strength))
+        rerender = True
+    if req.gradient_strength is not None:
+        state.gradient_strength = max(0.0, min(30.0, req.gradient_strength))
+        rerender = True
+    if rerender and state.shape_pop:
+        state._render_thumbnails()
+        # Update current history snapshot thumbnails
+        if state._history and state._history_idx >= 0:
+            state._history[state._history_idx].thumbnails = list(state._cached_thumbnails)
+    return JSONResponse(state.get_state_payload())
+
+
+@app.get("/api/home_samples")
+def api_home_samples():
+    return JSONResponse(state.get_home_samples())
 
 
 @app.post("/api/prev")
@@ -437,6 +511,12 @@ def api_next():
 
 @app.get("/", response_class=HTMLResponse)
 def index():
+    html_path = STATIC_DIR / "index.html"
+    return HTMLResponse(html_path.read_text())
+
+
+@app.get("/evolve", response_class=HTMLResponse)
+def evolve_page():
     html_path = STATIC_DIR / "index.html"
     return HTMLResponse(html_path.read_text())
 

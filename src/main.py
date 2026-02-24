@@ -67,7 +67,7 @@ def get_activation_options(mode: str) -> list[str] | None:
     elif mode == "basquiat":
         return BASQUIAT_ACTIVATIONS
     return ALL_ACTIVATIONS
-
+ 
 
 def _run_shapes(args):
     from src.shapes.population import ShapePopulation

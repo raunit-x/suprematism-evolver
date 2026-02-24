@@ -32,6 +32,10 @@ def _palette_rgb(palette: list[tuple], idx: int) -> tuple[int, int, int]:
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
 # ------------------------------------------------------------------
 # Shape drawing primitives
 # ------------------------------------------------------------------
@@ -143,32 +147,132 @@ def _darken(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
     )
 
 
+def _centroid(pts: list[tuple[float, float]]) -> tuple[float, float]:
+    inv = 1.0 / max(1, len(pts))
+    return (sum(p[0] for p in pts) * inv, sum(p[1] for p in pts) * inv)
+
+
+def _inset_polygon(pts: list[tuple[float, float]], scale: float) -> list[tuple[float, float]]:
+    cx, cy = _centroid(pts)
+    return [((x - cx) * scale + cx, (y - cy) * scale + cy) for x, y in pts]
+
+
+def _get_shape_corners(kind: str, pw: float, ph: float) -> list[tuple[float, float]]:
+    hw, hh = pw / 2.0, ph / 2.0
+    if kind == "triangle":
+        # Top-center, bottom-right, bottom-left
+        return [(0, -hh), (hw, hh), (-hw, hh)]
+    elif kind == "trapezoid":
+        narrow = max(1.0, hw * 0.45)
+        return [(-narrow, -hh), (narrow, -hh), (hw, hh), (-hw, hh)]
+    elif kind == "line":
+        thickness = max(2.0, min(pw, ph) / 8.0)
+        ht = thickness / 2.0
+        return [(-hw, -ht), (hw, -ht), (hw, ht), (-hw, ht)]
+    elif kind == "cross":
+        arm = max(1.5, min(pw, ph) / 10.0)
+        # 12 vertices clockwise
+        return [
+            (-arm, -hh), (arm, -hh), (arm, -arm),
+            (hw, -arm), (hw, arm), (arm, arm),
+            (arm, hh), (-arm, hh), (-arm, arm),
+            (-hw, arm), (-hw, -arm), (-arm, -arm)
+        ]
+    else:
+        # Default to bounding box (rect, square, circle, etc.)
+        return [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+
+
+def _projection_vector(shape: Shape, width: int, height: int,
+                       genome: ShapeGenome) -> tuple[float, float]:
+    """Return per-shape projection vector in normalized canvas units.
+
+    Mode 0: single oblique vector.
+    Mode 1: blend between two projection vectors across screen space.
+    Mode 2: fan perspective from vanishing point.
+    """
+    mode = int(genome.camera_mode) % 3
+
+    if mode == 0:
+        ang = math.radians(genome.projection_angle)
+        return (
+            math.cos(ang) * genome.projection_strength,
+            -math.sin(ang) * genome.projection_strength,
+        )
+
+    if mode == 1:
+        a1 = math.radians(genome.projection_angle)
+        a2 = math.radians(genome.projection_secondary_angle)
+        s1 = max(0.0, genome.projection_strength)
+        s2 = max(0.0, genome.projection_secondary_strength)
+        span = 1.15 + 0.65 * abs(genome.perspective_bias)
+        t = 0.5 + (shape.x - genome.projection_vanishing_x) * span
+        t = _clamp(t, 0.0, 1.0)
+        vx1, vy1 = math.cos(a1) * s1, -math.sin(a1) * s1
+        vx2, vy2 = math.cos(a2) * s2, -math.sin(a2) * s2
+        return (vx1 * (1.0 - t) + vx2 * t, vy1 * (1.0 - t) + vy2 * t)
+
+    # mode == 2, fan from vanishing point
+    px = shape.x * width
+    py = shape.y * height
+    vp_x = genome.projection_vanishing_x * width
+    vp_y = genome.projection_vanishing_y * height
+    dx = px - vp_x
+    dy = py - vp_y
+    norm = math.hypot(dx, dy)
+    if norm < 1e-6:
+        ang = math.radians(genome.projection_angle)
+        return (
+            math.cos(ang) * genome.projection_strength,
+            -math.sin(ang) * genome.projection_strength,
+        )
+
+    ux = dx / norm
+    uy = dy / norm
+    dist_factor = _clamp(norm / max(1.0, math.hypot(width, height)), 0.0, 1.0)
+    mag = genome.projection_strength * (0.55 + 0.95 * dist_factor)
+    mag *= (1.0 + 0.45 * genome.perspective_bias)
+    return (ux * mag, uy * mag)
+
+
 def _render_cuboid_layer(shape: Shape, width: int, height: int,
                           palette: list[tuple],
-                          proj_angle: float,
-                          proj_strength: float) -> Image.Image:
-    """Render a shape as an oblique-projected 3D cuboid with face shading.
-
-    Three faces are drawn: side face (darkest), top/bottom cap (lightest),
-    and front face (base color).  Thin edge lines add architectural detail.
+                          genome: ShapeGenome) -> Image.Image:
+    """Render a shape as an oblique-projected 3D extruded polygon with face shading.
+    
+    Generates local vertices based on shape kind, extrudes them, 
+    and dynamically draws visible side faces using edge normals.
     """
     rgb = _palette_rgb(palette, shape.color_idx)
     alpha = int(shape.opacity * 255)
 
-    front_color = rgb + (alpha,)
-    top_color = _lighten(rgb, 0.30) + (alpha,)
-    side_color = _darken(rgb, 0.25) + (alpha,)
-    edge_color = _darken(rgb, 0.50) + (min(255, alpha + 20),)
+    is_glass = shape.opacity < 0.68
+    if is_glass:
+        front_color = _lighten(rgb, 0.34) + (max(70, int(alpha * 0.66)),)
+        top_color = _lighten(rgb, 0.48) + (max(55, int(alpha * 0.46)),)
+        side_color = _lighten(rgb, 0.22) + (max(45, int(alpha * 0.38)),)
+        edge_color = _lighten(rgb, 0.60) + (max(80, int(alpha * 0.60)),)
+        highlight_edge = (245, 248, 255, min(255, int(alpha * 0.78) + 68))
+        shadow_edge = _darken(rgb, 0.35) + (max(50, int(alpha * 0.42)),)
+        seam_color = _lighten(rgb, 0.32) + (max(50, int(alpha * 0.48)),)
+    else:
+        front_color = rgb + (alpha,)
+        top_color = _lighten(rgb, 0.30) + (alpha,)
+        side_color = _darken(rgb, 0.25) + (alpha,)
+        edge_color = _darken(rgb, 0.50) + (min(255, alpha + 20),)
+        highlight_edge = _lighten(rgb, 0.52) + (min(255, alpha + 30),)
+        shadow_edge = _darken(rgb, 0.62) + (min(255, alpha + 30),)
+        seam_color = _darken(rgb, 0.45) + (max(80, int(alpha * 0.75)),)
 
     # Projection vectors (pixels per unit)
-    proj_rad = math.radians(proj_angle)
-    scale = min(width, height) * proj_strength
+    scale = min(width, height)
+    proj_dx, proj_dy = _projection_vector(shape, width, height, genome)
 
-    depth_dx = shape.depth * scale * math.cos(proj_rad)
-    depth_dy = -shape.depth * scale * math.sin(proj_rad)
+    depth_dx = shape.depth * scale * proj_dx
+    depth_dy = shape.depth * scale * proj_dy
 
-    elev_dx = shape.elevation * scale * math.cos(proj_rad)
-    elev_dy = -shape.elevation * scale * math.sin(proj_rad)
+    elev_dx = shape.elevation * scale * proj_dx
+    elev_dy = shape.elevation * scale * proj_dy
 
     # Front face dimensions and center (with elevation offset)
     pw = max(1, int(shape.w * width))
@@ -176,21 +280,56 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     cx = shape.x * width + elev_dx
     cy = shape.y * height + elev_dy
 
-    # Front face corner offsets from center
-    hw, hh = pw / 2.0, ph / 2.0
-    local_corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]  # TL TR BR BL
-
     # Apply rotation around center
     rad = math.radians(shape.rotation)
     cos_r, sin_r = math.cos(rad), math.sin(rad)
+
+    local_corners = _get_shape_corners(shape.kind, float(pw), float(ph))
 
     front = []
     for lx, ly in local_corners:
         front.append((lx * cos_r - ly * sin_r + cx,
                        lx * sin_r + ly * cos_r + cy))
 
-    # Back face = front displaced by depth projection
+    # Back face = front displaced by depth projection.
     back = [(x + depth_dx, y + depth_dy) for x, y in front]
+
+    # Final safety fit: keep projected volumes fully inside render bounds.
+    pad = 2.0
+    all_pts = front + back
+    min_x = min(p[0] for p in all_pts)
+    max_x = max(p[0] for p in all_pts)
+    min_y = min(p[1] for p in all_pts)
+    max_y = max(p[1] for p in all_pts)
+    avail_w = max(1.0, width - 2.0 * pad)
+    avail_h = max(1.0, height - 2.0 * pad)
+    span_x = max_x - min_x
+    span_y = max_y - min_y
+
+    if span_x > avail_w or span_y > avail_h:
+        fit = min(avail_w / max(span_x, 1e-6), avail_h / max(span_y, 1e-6), 1.0)
+        cx_all, cy_all = _centroid(all_pts)
+        front = [((x - cx_all) * fit + cx_all, (y - cy_all) * fit + cy_all) for x, y in front]
+        back = [((x - cx_all) * fit + cx_all, (y - cy_all) * fit + cy_all) for x, y in back]
+        all_pts = front + back
+        min_x = min(p[0] for p in all_pts)
+        max_x = max(p[0] for p in all_pts)
+        min_y = min(p[1] for p in all_pts)
+        max_y = max(p[1] for p in all_pts)
+
+    shift_x = 0.0
+    shift_y = 0.0
+    if min_x < pad:
+        shift_x += pad - min_x
+    if max_x > width - pad:
+        shift_x -= max_x - (width - pad)
+    if min_y < pad:
+        shift_y += pad - min_y
+    if max_y > height - pad:
+        shift_y -= max_y - (height - pad)
+    if abs(shift_x) > 1e-6 or abs(shift_y) > 1e-6:
+        front = [(x + shift_x, y + shift_y) for x, y in front]
+        back = [(x + shift_x, y + shift_y) for x, y in back]
 
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
@@ -199,23 +338,51 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
         return [tuple(map(int, p)) for p in pts]
 
     if shape.depth > 0.002:
-        # Top or bottom cap face
-        if depth_dy <= 0:  # projection goes upward -> top face visible
-            cap = [front[0], front[1], back[1], back[0]]
-        else:
-            cap = [front[3], front[2], back[2], back[3]]
-        draw.polygon(_ipoly(cap), fill=top_color)
+        # Soft projected shadow to ground the forms and reduce toy-block look.
+        shadow_poly = [
+            (x + depth_dx * 1.3 - elev_dx * 0.2, y + depth_dy * 1.3 - elev_dy * 0.2)
+            for x, y in front
+        ]
+        shadow_alpha = int(18 + alpha * 0.09) if is_glass else int(30 + alpha * 0.12)
+        draw.polygon(_ipoly(shadow_poly), fill=(0, 0, 0, shadow_alpha))
 
-        # Side face (left or right depending on projection direction)
-        if depth_dx >= 0:  # projection goes rightward -> right side visible
-            side = [front[1], front[2], back[2], back[1]]
-        else:
-            side = [front[0], front[3], back[3], back[0]]
-        draw.polygon(_ipoly(side), fill=side_color)
+        n_pts = len(front)
+        faces_to_draw = []
+        for i in range(n_pts):
+            p1 = front[i]
+            p2 = front[(i + 1) % n_pts]
+            ex = p2[0] - p1[0]
+            ey = p2[1] - p1[1]
+            
+            # Outward normal (assuming clockwise vertices and Y-down)
+            nx = ey
+            ny = -ex
+            
+            # Dot product with extrusion vector
+            dot = nx * depth_dx + ny * depth_dy
+            
+            if dot > 1e-4:
+                face = [p1, p2, back[(i + 1) % n_pts], back[i]]
+                
+                # Shading based on normal direction
+                # ny < 0 means pointing UP.
+                if abs(ny) > abs(nx):
+                    fc = top_color
+                else:
+                    fc = side_color
+                    
+                faces_to_draw.append((face, fc))
+        
+        # Sort faces by depth (furthest along extrusion vector drawn first)
+        faces_to_draw.sort(key=lambda item: (
+            sum(p[0] for p in item[0]) * depth_dx + 
+            sum(p[1] for p in item[0]) * depth_dy
+        ), reverse=True)
 
-        # Architectural edge lines
-        for face in (cap, side):
+        for face, fc in faces_to_draw:
             pts = _ipoly(face)
+            draw.polygon(pts, fill=fc)
+            # Architectural edge lines
             for i in range(len(pts)):
                 draw.line([pts[i], pts[(i + 1) % len(pts)]],
                           fill=edge_color, width=1)
@@ -224,10 +391,61 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     front_pts = _ipoly(front)
     draw.polygon(front_pts, fill=front_color)
 
+    if len(front) >= 3:
+        # Subtle front-face panel modulation for a more finished architectural feel.
+        if is_glass:
+            inner = _ipoly(_inset_polygon(front, 0.90))
+            draw.polygon(inner, fill=_lighten(rgb, 0.52) + (max(20, int(alpha * 0.24)),))
+        else:
+            inner = _ipoly(_inset_polygon(front, 0.92))
+            core = _ipoly(_inset_polygon(front, 0.84))
+            draw.polygon(inner, fill=_lighten(rgb, 0.10) + (int(alpha * 0.20),))
+            draw.polygon(core, fill=_darken(rgb, 0.08) + (int(alpha * 0.10),))
+
     if shape.depth > 0.002:
-        for i in range(len(front_pts)):
-            draw.line([front_pts[i], front_pts[(i + 1) % len(front_pts)]],
-                      fill=edge_color, width=1)
+        # Directional edge tinting simulates bevel highlights/shadows.
+        light_dir = (-0.68, -0.74)
+        for i in range(len(front)):
+            p1 = front[i]
+            p2 = front[(i + 1) % len(front)]
+            ex = p2[0] - p1[0]
+            ey = p2[1] - p1[1]
+            nx = ey
+            ny = -ex
+            dot = nx * light_dir[0] + ny * light_dir[1]
+            ec = highlight_edge if dot > 0 else shadow_edge
+            draw.line(
+                [tuple(map(int, p1)), tuple(map(int, p2))],
+                fill=ec,
+                width=1,
+            )
+
+        # Material-specific surface finish.
+        cfx, cfy = _centroid(front)
+        if is_glass:
+            axis = math.radians(shape.rotation - 28)
+            dx = math.cos(axis)
+            dy = math.sin(axis)
+            half_len = min(pw, ph) * 0.34
+            p1 = (cfx - dx * half_len, cfy - dy * half_len)
+            p2 = (cfx + dx * half_len, cfy + dy * half_len)
+            draw.line([tuple(map(int, p1)), tuple(map(int, p2))], fill=highlight_edge, width=1)
+            p1b = (p1[0] + 2.0, p1[1] + 2.0)
+            p2b = (p2[0] + 2.0, p2[1] + 2.0)
+            draw.line([tuple(map(int, p1b)), tuple(map(int, p2b))], fill=seam_color, width=1)
+        elif max(pw, ph) >= 34 and _py_random.random() < 0.72:
+            seam_count = 1 + (1 if max(pw, ph) >= 72 and _py_random.random() < 0.45 else 0)
+            axis = math.radians(shape.rotation + (90 if pw > ph else 0))
+            dx = math.cos(axis)
+            dy = math.sin(axis)
+            nx = -dy
+            ny = dx
+            half_len = min(pw, ph) * 0.28
+            for s_idx in range(seam_count):
+                off = (s_idx - (seam_count - 1) / 2.0) * min(pw, ph) * 0.18
+                p1 = (cfx + nx * off - dx * half_len, cfy + ny * off - dy * half_len)
+                p2 = (cfx + nx * off + dx * half_len, cfy + ny * off + dy * half_len)
+                draw.line([tuple(map(int, p1)), tuple(map(int, p2))], fill=seam_color, width=1)
 
     return layer
 
@@ -235,44 +453,181 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
 def _render_background_fields(canvas: Image.Image,
                                genome: ShapeGenome,
                                palette: list[tuple]) -> None:
-    """Render large diagonal color fields for dramatic Hadid-style background.
+    """Render dramatic Hadid-style backgrounds based on bg_style.
 
-    Creates a bold geometric split between the main background color and
-    a contrasting field, using the projection angle for visual harmony.
+    Styles:
+    0 = Bold geometric split field
+    1 = Secondary color to black gradient
+    2 = Clean solid background
+    3 = Multi-band directional fields
+    4 = Atmospheric radial sweep
     """
-    w, h = canvas.size
-    draw = ImageDraw.Draw(canvas)
+    if genome.bg_style == 2:
+        return  # Keep clean solid canvas from base fill.
 
-    # Field dividing angle harmonised with the projection
-    field_angle = math.radians(genome.projection_angle * 1.5 + 20)
+    w, h = canvas.size
+
+    if genome.bg_style == 1:
+        arr = np.zeros((h, w, 4), dtype=np.uint8)
+        sec_rgb = _palette_rgb(palette, genome.bg_sec_idx)
+        rad = math.radians(genome.bg_angle)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+
+        xs = np.linspace(-1, 1, w)
+        ys = np.linspace(-1, 1, h)
+        xx, yy = np.meshgrid(xs, ys)
+        proj = xx * cos_a + yy * sin_a
+        proj = (proj - proj.min()) / (proj.max() - proj.min())
+
+        arr[:, :, 0] = (proj * sec_rgb[0]).astype(np.uint8)
+        arr[:, :, 1] = (proj * sec_rgb[1]).astype(np.uint8)
+        arr[:, :, 2] = (proj * sec_rgb[2]).astype(np.uint8)
+        arr[:, :, 3] = 255
+
+        grad_img = Image.fromarray(arr, "RGBA")
+        canvas.paste(Image.alpha_composite(canvas, grad_img), (0, 0))
+        return
+
+    if genome.bg_style == 3:
+        draw = ImageDraw.Draw(canvas)
+        sec_rgb = _palette_rgb(palette, genome.bg_sec_idx)
+        alt_rgb = _palette_rgb(palette, (genome.bg_sec_idx + 2) % len(palette))
+        field_angle = math.radians(genome.bg_angle)
+        ux = math.cos(field_angle)
+        uy = -math.sin(field_angle)
+        ext = float(max(w, h)) * 2.2
+        center_x = genome.bg_cx * w
+        center_y = genome.bg_cy * h
+        for band_idx in range(3):
+            shift = (band_idx - 1) * max(w, h) * _py_random.uniform(0.10, 0.24)
+            px = center_x + shift * ux
+            py = center_y + shift * uy
+            la = (px + ux * ext, py + uy * ext)
+            lb = (px - ux * ext, py - uy * ext)
+            perp_x, perp_y = uy, -ux
+            off = float(max(w, h)) * _py_random.uniform(0.45, 0.9)
+            lc = (lb[0] + perp_x * off, lb[1] + perp_y * off)
+            ld = (la[0] + perp_x * off, la[1] + perp_y * off)
+            color = sec_rgb if band_idx != 1 else alt_rgb
+            alpha = int(70 + band_idx * 35)
+            draw.polygon(
+                [tuple(map(int, p)) for p in [la, lb, lc, ld]],
+                fill=color + (alpha,),
+            )
+        return
+
+    if genome.bg_style == 4:
+        sec_rgb = np.array(_palette_rgb(palette, genome.bg_sec_idx), dtype=np.float32)
+        alt_rgb = np.array(
+            _palette_rgb(palette, (genome.bg_sec_idx + 3) % len(palette)),
+            dtype=np.float32,
+        )
+        xs = np.linspace(0.0, 1.0, w, dtype=np.float32)
+        ys = np.linspace(0.0, 1.0, h, dtype=np.float32)
+        yy, xx = np.meshgrid(ys, xs, indexing="ij")
+
+        cx = np.float32(genome.bg_cx)
+        cy = np.float32(genome.bg_cy)
+        dx = xx - cx
+        dy = yy - cy
+        r = np.sqrt(dx * dx + dy * dy)
+        r = np.clip(r / np.float32(np.sqrt(2.0)), 0.0, 1.0)
+
+        ang = np.float32(math.radians(genome.bg_angle))
+        beam = np.clip(1.0 - np.abs(dx * np.cos(ang) + dy * np.sin(ang)) * 2.2, 0.0, 1.0)
+        halo = np.clip(1.0 - r * 1.35, 0.0, 1.0)
+        mix = np.clip(0.58 * halo + 0.42 * beam, 0.0, 1.0)
+
+        arr = np.zeros((h, w, 4), dtype=np.uint8)
+        for c in range(3):
+            col = sec_rgb[c] * (0.25 + 0.75 * mix) + alt_rgb[c] * (0.35 * (1.0 - mix))
+            arr[:, :, c] = np.clip(col, 0, 255).astype(np.uint8)
+        arr[:, :, 3] = 255
+        canvas.paste(Image.alpha_composite(canvas, Image.fromarray(arr, "RGBA")), (0, 0))
+
+        # Add one translucent directional slice for extra compositional variety.
+        draw = ImageDraw.Draw(canvas)
+        slice_ang = math.radians(genome.bg_angle + 20.0)
+        ux = math.cos(slice_ang)
+        uy = -math.sin(slice_ang)
+        ext = float(max(w, h)) * 2.2
+        px = w * genome.bg_cx
+        py = h * genome.bg_cy
+        la = (px + ux * ext, py + uy * ext)
+        lb = (px - ux * ext, py - uy * ext)
+        perp_x, perp_y = uy, -ux
+        off = float(max(w, h)) * 0.55
+        lc = (lb[0] + perp_x * off, lb[1] + perp_y * off)
+        ld = (la[0] + perp_x * off, la[1] + perp_y * off)
+        draw.polygon(
+            [tuple(map(int, p)) for p in [la, lb, lc, ld]],
+            fill=tuple(sec_rgb.astype(np.uint8)) + (70,),
+        )
+        return
+
+    # Style 0: Geometric split field.
+    draw = ImageDraw.Draw(canvas)
+    field_angle = math.radians(genome.bg_angle)
     cos_a = math.cos(field_angle)
     sin_a = math.sin(field_angle)
+    px = w * genome.bg_cx
+    py = h * genome.bg_cy
 
-    # Pivot roughly at lower-left third of canvas
-    px = w * 0.33
-    py = h * 0.55
-
-    # Extend dividing line well past canvas edges
     ext = float(max(w, h)) * 2.0
     la = (px + cos_a * ext, py - sin_a * ext)
     lb = (px - cos_a * ext, py + sin_a * ext)
 
-    # Perpendicular offset to create half-plane polygon
     perp_x, perp_y = -sin_a, -cos_a
     off = float(max(w, h)) * 2.0
     lc = (lb[0] + perp_x * off, lb[1] + perp_y * off)
     ld = (la[0] + perp_x * off, la[1] + perp_y * off)
 
-    # Choose contrasting secondary color
-    bg_idx = genome.bg_color_idx
+    sec_idx = genome.bg_sec_idx
     n = len(palette)
-    sec_idx = 0  # white / lightest
-    if sec_idx == bg_idx and n > 1:
-        sec_idx = min(n - 1, bg_idx + 1)
+    if sec_idx >= n:
+        sec_idx = sec_idx % n
     sec_rgb = _palette_rgb(palette, sec_idx)
 
     poly = [tuple(map(int, p)) for p in [la, lb, lc, ld]]
-    draw.polygon(poly, fill=sec_rgb + (255,))
+    draw.polygon(poly, fill=sec_rgb + (220,))
+
+
+def _apply_atmospheric_blend(image: Image.Image,
+                             genome: ShapeGenome,
+                             palette: list[tuple]) -> Image.Image:
+    """Softly blend background color into rendered structure planes."""
+    blend = _clamp(genome.bg_blend, 0.0, 1.0)
+    if blend <= 0.01:
+        return image
+
+    arr = np.array(image).astype(np.float32)
+    h, w = arr.shape[:2]
+    xs = np.linspace(-1.0, 1.0, w, dtype=np.float32)
+    ys = np.linspace(-1.0, 1.0, h, dtype=np.float32)
+    yy, xx = np.meshgrid(ys, xs, indexing="ij")
+
+    rad = math.radians(genome.bg_angle)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    cx = (genome.bg_cx * 2.0) - 1.0
+    cy = (genome.bg_cy * 2.0) - 1.0
+
+    directed = (xx - cx) * cos_a + (yy - cy) * sin_a
+    directed = (directed - directed.min()) / max(1e-6, directed.max() - directed.min())
+    directed = np.power(directed, 0.7 if genome.bg_style in (1, 3, 4) else 1.0)
+
+    vignette = np.sqrt(xx * xx + yy * yy)
+    vignette = np.clip((vignette - 0.35) / 0.9, 0.0, 1.0)
+
+    mask = np.clip(0.75 * directed + 0.35 * vignette, 0.0, 1.0)
+    amount = mask * (0.08 + 0.32 * blend)
+    tint = np.array(_palette_rgb(palette, genome.bg_sec_idx), dtype=np.float32)
+
+    for c in range(3):
+        arr[:, :, c] = arr[:, :, c] * (1.0 - amount) + tint[c] * amount
+
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), image.mode)
 
 
 # ------------------------------------------------------------------
@@ -394,6 +749,69 @@ def _apply_shape_texture(layer: Image.Image, strength: float = 12.0) -> Image.Im
 
 
 # ------------------------------------------------------------------
+# Painterly edge roughness
+# ------------------------------------------------------------------
+
+def _apply_edge_roughness(layer: Image.Image) -> Image.Image:
+    """Add hand-painted edge irregularities to a shape layer.
+
+    Detects edges via the alpha-channel gradient and applies:
+      - Alpha erosion with random noise (uneven paint coverage at borders)
+      - Slight color darkening at edges (paint pooling where strokes end)
+      - Tiny speckle overspill just outside the shape boundary
+    """
+    arr = np.array(layer)
+    alpha = arr[:, :, 3].astype(np.float32)
+    if alpha.max() == 0:
+        return layer
+
+    h, w = alpha.shape
+    rng = np.random.default_rng()
+
+    # Edge detection via alpha gradient magnitude
+    gy = np.abs(np.diff(alpha, axis=0, prepend=0))
+    gx = np.abs(np.diff(alpha, axis=1, prepend=0))
+    edge_raw = np.clip((gx + gy) / max(alpha.max(), 1.0), 0, 1)
+
+    # Widen edge band so the effect is visible
+    edge_img = Image.fromarray((edge_raw * 255).astype(np.uint8), "L")
+    edge_img = edge_img.filter(ImageFilter.MaxFilter(3))
+    edge = np.array(edge_img).astype(np.float32) / 255.0
+
+    # 1) Alpha irregularity — random erosion at edges
+    noise = rng.uniform(0, 1, (h, w)).astype(np.float32)
+    alpha_jitter = edge * noise * 55
+    new_alpha = np.clip(alpha - alpha_jitter, 0, 255)
+
+    # 2) Tiny overspill speckles just outside the boundary
+    outside = (alpha < 5) & (edge_raw > 0.1)
+    speckle_chance = rng.uniform(0, 1, (h, w)) < 0.12
+    speckle_mask = outside & speckle_chance
+    new_alpha[speckle_mask] = rng.uniform(20, 70, size=int(speckle_mask.sum()))
+
+    # Copy dominant color into speckle pixels so they aren't black
+    if speckle_mask.any():
+        for c in range(3):
+            ch = arr[:, :, c].copy()
+            # Propagate nearby color via a small blur of the original
+            filled = np.array(
+                Image.fromarray(arr[:, :, c], "L").filter(ImageFilter.BoxBlur(2))
+            )
+            ch[speckle_mask] = filled[speckle_mask]
+            arr[:, :, c] = ch
+
+    arr[:, :, 3] = new_alpha.astype(np.uint8)
+
+    # 3) Color darkening at edges (paint pooling)
+    darken = edge * rng.uniform(0.3, 1.0, (h, w)).astype(np.float32) * 18
+    for c in range(3):
+        ch = arr[:, :, c].astype(np.float32)
+        arr[:, :, c] = np.clip(ch - darken, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(arr, "RGBA")
+
+
+# ------------------------------------------------------------------
 # Shape layer rendering
 # ------------------------------------------------------------------
 
@@ -418,6 +836,7 @@ def _render_shape_layer(shape: Shape, width: int, height: int,
     drawer(draw, half, half, pw, ph, color)
 
     tmp = _apply_shape_texture(tmp, strength=14.0)
+    tmp = _apply_edge_roughness(tmp)
 
     if shape.rotation % 360 != 0:
         tmp = tmp.rotate(-shape.rotation, resample=Image.BICUBIC,
@@ -434,12 +853,57 @@ def _render_shape_layer(shape: Shape, width: int, height: int,
 # Full genome rendering
 # ------------------------------------------------------------------
 
+def _apply_grain(image: Image.Image, strength: float = 8.0) -> Image.Image:
+    """Add subtle film-grain noise for a painterly, analog feel."""
+    if strength <= 0:
+        return image
+    arr = np.array(image).astype(np.float32)
+    h, w = arr.shape[:2]
+    rng = np.random.default_rng()
+    noise = rng.normal(0, strength, (h, w)).astype(np.float32)
+    for c in range(min(arr.shape[2], 3)):
+        arr[:, :, c] = np.clip(arr[:, :, c] + noise, 0, 255)
+    return Image.fromarray(arr.astype(np.uint8), image.mode)
+
+
+def _apply_color_gradient(image: Image.Image, strength: float = 12.0) -> Image.Image:
+    """Apply a subtle warm-to-cool diagonal color tint.
+
+    Top-left gets a warm (slightly amber) shift, bottom-right gets a
+    cool (slightly blue) shift.  The effect is very gentle — it adds
+    depth and atmosphere without overpowering the palette.
+    """
+    if strength <= 0:
+        return image
+    arr = np.array(image).astype(np.float32)
+    h, w = arr.shape[:2]
+
+    xs = np.linspace(0, 1, w, dtype=np.float32)
+    ys = np.linspace(0, 1, h, dtype=np.float32)
+    yy, xx = np.meshgrid(ys, xs, indexing="ij")
+
+    diag = (xx + yy) / 2.0
+
+    warm = (1.0 - diag) * strength
+    cool = diag * strength
+
+    arr[:, :, 0] = np.clip(arr[:, :, 0] + warm * 0.7, 0, 255)   # red: warm
+    arr[:, :, 1] = np.clip(arr[:, :, 1] + warm * 0.3, 0, 255)   # green: slight warm
+    arr[:, :, 2] = np.clip(arr[:, :, 2] + cool * 0.5, 0, 255)   # blue: cool
+
+    return Image.fromarray(arr.astype(np.uint8), image.mode)
+
+
+# Render settings (module-level defaults, updated by server)
+GRAIN_STRENGTH: float = 8.0
+GRADIENT_STRENGTH: float = 10.0
+
+
 def render_genome(genome: ShapeGenome, width: int, height: int,
                   palette: list[tuple] | None = None) -> Image.Image:
     if palette is None:
         palette = DEFAULT_PALETTE
 
-    # Dispatch to 3D renderer when projection is active
     if genome.projection_strength > 0.01:
         return _render_genome_3d(genome, width, height, palette)
 
@@ -455,6 +919,8 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
 
     result = canvas.convert("RGB")
     result = _apply_canvas_texture(result, strength=14.0)
+    result = _apply_grain(result, strength=GRAIN_STRENGTH)
+    result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
 
     if _SUPERSAMPLE > 1:
         result = result.resize((width, height), Image.LANCZOS)
@@ -484,15 +950,16 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
 
     for shape in all_shapes:
         layer = _render_cuboid_layer(
-            shape, iw, ih, palette,
-            genome.projection_angle,
-            genome.projection_strength,
+            shape, iw, ih, palette, genome,
         )
         canvas = Image.alpha_composite(canvas, layer)
 
     result = canvas.convert("RGB")
+    result = _apply_atmospheric_blend(result, genome, palette)
     # Subtle canvas texture (lighter than flat mode for cleaner architectural look)
     result = _apply_canvas_texture(result, strength=6.0)
+    result = _apply_grain(result, strength=GRAIN_STRENGTH)
+    result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
 
     if _SUPERSAMPLE > 1:
         result = result.resize((width, height), Image.LANCZOS)
