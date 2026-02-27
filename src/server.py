@@ -14,7 +14,9 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
@@ -36,7 +38,15 @@ import src.shapes.renderer as _shape_renderer
 OUTPUT_DIR = Path("output")
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="Suprematism Evolution")
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    state.initialize()
+    yield
+
+
+app = FastAPI(title="Suprematism Evolution", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -630,8 +640,9 @@ def evolve_page():
 
 if __name__ == "__main__":
     import uvicorn
-    import webbrowser
-    state.initialize()
-    print("Starting server at http://localhost:8000")
-    webbrowser.open("http://localhost:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    if not os.environ.get("PORT"):
+        import webbrowser
+        print(f"Starting server at http://localhost:{port}")
+        webbrowser.open(f"http://localhost:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
