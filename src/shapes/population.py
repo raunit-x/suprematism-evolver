@@ -15,6 +15,7 @@ from src.shapes.genome import (
     ShapeGenome,
     create_random,
     create_architecton,
+    create_map,
     crossover,
     mutate,
 )
@@ -48,6 +49,14 @@ class ShapePopulation:
         """Initialize population with Hadid-style architecton genomes."""
         self.genomes = [
             create_architecton(self.num_palette_colors)
+            for _ in range(self.pop_size)
+        ]
+        self.generation = 0
+
+    def initialize_maps(self) -> None:
+        """Initialize population with abstract city-plan genomes."""
+        self.genomes = [
+            create_map(self.num_palette_colors)
             for _ in range(self.pop_size)
         ]
         self.generation = 0

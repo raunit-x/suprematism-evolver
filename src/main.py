@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE, HADID_PALETTE
+from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE, HADID_PALETTE, MAPS_PALETTE
 from src.art.fitness import compute_style_fitness
 from src.cppn.activations import MALEVICH_ACTIVATIONS, BASQUIAT_ACTIVATIONS, ALL_ACTIVATIONS
 
@@ -32,9 +32,9 @@ def parse_args():
     p = argparse.ArgumentParser(description="Evolutionary Art: Malevich x Basquiat")
     p.add_argument(
         "--engine",
-        choices=["shapes", "cppn", "hadid"],
+        choices=["shapes", "cppn", "hadid", "maps"],
         default="shapes",
-        help="Evolution engine (default: shapes, hadid = 3D architecton)",
+        help="Evolution engine (default: shapes, hadid = 3D architecton, maps = city plans)",
     )
     p.add_argument(
         "--mode",
@@ -406,12 +406,115 @@ def _run_hadid(args):
         print(f"  -> Evolved to generation {pop.generation}\n")
 
 
+def _run_maps(args):
+    """Run the Maps abstract city-plan 3D evolution mode."""
+    from src.shapes.population import ShapePopulation
+    from src.shapes.renderer import render_genome, render_population_grid
+
+    palette = list(MAPS_PALETTE.values())
+
+    config = {
+        "pop_size": args.pop_size,
+        "num_palette_colors": len(MAPS_PALETTE),
+        "elitism": 2,
+        "crossover_rate": 0.7,
+        "tournament_k": 3,
+    }
+
+    pop = ShapePopulation(config)
+
+    if args.branch:
+        print(f"Branching from genome: {args.branch}")
+        pop.branch_from(args.branch)
+    else:
+        pop.initialize_maps()
+
+    print(f"=== Maps 3D City-Plan Evolution ===")
+    print(f"Engine: maps | Population: {args.pop_size}")
+    print()
+
+    while True:
+        grid_img = render_population_grid(
+            pop.genomes, thumb_size=args.thumb_size, cols=GRID_COLS, palette=palette,
+        )
+        grid_path = OUTPUT_DIR / f"gen_{pop.generation:04d}_grid.png"
+        grid_img.save(grid_path)
+        print(f"Generation {pop.generation} -- Grid saved to: {grid_path}")
+
+        n = len(pop.genomes)
+        rows = (n + GRID_COLS - 1) // GRID_COLS
+        print(f"  Images 0-{n-1} ({rows} rows x {GRID_COLS} cols):")
+        for r in range(rows):
+            start = r * GRID_COLS
+            end = min(start + GRID_COLS, n)
+            indices = "  ".join(f"[{i:2d}]" for i in range(start, end))
+            print(f"    {indices}")
+        print()
+
+        print("Commands:")
+        print("  <indices>  -- Select favorites (e.g., '2 5 11 17')")
+        print("  s <idx>    -- Save genome to JSON")
+        print("  e <idx>    -- Export high-res image")
+        print("  q          -- Quit")
+        print()
+
+        try:
+            user_input = input("Select> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting.")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() == "q":
+            print("Exiting.")
+            break
+
+        if user_input.lower().startswith("s "):
+            try:
+                idx = int(user_input.split()[1])
+                save_path = OUTPUT_DIR / f"genome_{pop.generation:04d}_{idx:02d}.json"
+                pop.save_genome(idx, save_path)
+                print(f"  Saved genome to: {save_path}")
+            except (ValueError, IndexError) as e:
+                print(f"  Error: {e}")
+            continue
+
+        if user_input.lower().startswith("e "):
+            try:
+                idx = int(user_input.split()[1])
+                genome = pop.genomes[idx]
+                hires_path = OUTPUT_DIR / f"hires_{pop.generation:04d}_{idx:02d}.png"
+                img = render_genome(genome, args.hires, args.hires, palette)
+                img.save(hires_path)
+                print(f"  High-res ({args.hires}x{args.hires}) saved to: {hires_path}")
+            except (ValueError, IndexError) as e:
+                print(f"  Error: {e}")
+            continue
+
+        try:
+            selected = [int(x) for x in user_input.split()]
+            valid = [i for i in selected if 0 <= i < n]
+            if not valid:
+                print("  No valid indices. Try again.")
+                continue
+            print(f"  Selected: {valid}")
+        except ValueError:
+            print("  Invalid input. Enter space-separated indices.")
+            continue
+
+        pop.evolve_with_selection(valid)
+        print(f"  -> Evolved to generation {pop.generation}\n")
+
+
 def main():
     args = parse_args()
     OUTPUT_DIR.mkdir(exist_ok=True)
 
     if args.engine == "hadid":
         _run_hadid(args)
+    elif args.engine == "maps":
+        _run_maps(args)
     elif args.engine == "shapes":
         _run_shapes(args)
     else:

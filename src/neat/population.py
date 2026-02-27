@@ -14,7 +14,7 @@ from src.cppn.network import CPPNNetwork
 # Default NEAT/CPPN configuration
 DEFAULT_CONFIG = {
     # CPPN structure
-    "num_inputs": 5,  # x, y, d, theta, bias
+    "num_inputs": 7,  # x, y, d, theta, bias, armature_d, armature_t
     "num_outputs": 3,  # R, G, B (or H, S, V)
     "output_activation": "tanh",
 
@@ -173,6 +173,9 @@ def _genome_to_dict(g: Genome) -> dict:
             }
             for k, v in g.connections.items()
         },
+        "comp_focal_x": g.comp_focal_x,
+        "comp_focal_y": g.comp_focal_y,
+        "comp_armature_angle": g.comp_armature_angle,
     }
 
 
@@ -201,5 +204,9 @@ def _dict_to_genome(d: dict) -> Genome:
             enabled=conn_data["enabled"],
         )
         g.connections[key] = c
+
+    g.comp_focal_x = d.get("comp_focal_x", 0.0)
+    g.comp_focal_y = d.get("comp_focal_y", 0.0)
+    g.comp_armature_angle = d.get("comp_armature_angle", 0.0)
 
     return g

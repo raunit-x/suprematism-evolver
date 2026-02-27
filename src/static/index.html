@@ -8,23 +8,24 @@
 @import url('https://fonts.googleapis.com/css2?family=Anton&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#f4f1ec;
-  --surface:#ffffff;
-  --surface-soft:#f8f5ef;
-  --surface-muted:#ebe7e0;
-  --border:#d7d0c3;
-  --border-strong:#171717;
-  --text:#171717;
-  --text-dim:#67615a;
+  --bg:#111;
+  --surface:#1a1917;
+  --surface-soft:#1e1c19;
+  --surface-muted:#2a2825;
+  --border:rgba(255,255,255,.1);
+  --border-strong:#f4f1ec;
+  --text:#f4f1ec;
+  --text-dim:#8a847b;
   --red:#cc0000;
-  --blue:#0044aa;
+  --blue:#3377cc;
   --yellow:#e8c800;
-  --ok:#0f8a3d;
-  --shadow:0 8px 30px rgba(0,0,0,.08);
+  --ok:#15b04e;
+  --shadow:0 8px 30px rgba(0,0,0,.3);
   --radius:10px;
   --sidebar:320px;
   --header-h:72px;
 }
+html{color-scheme:dark}
 html,body{
   font-family:'Space Grotesk','Inter',system-ui,-apple-system,sans-serif;
   background:var(--bg);
@@ -35,8 +36,8 @@ body{display:flex;flex-direction:column;overflow:hidden}
 
 .header{
   height:var(--header-h);
-  background:var(--surface);
-  border-bottom:2px solid var(--border-strong);
+  background:transparent;
+  border-bottom:1px solid var(--border);
   display:flex;
   align-items:center;
   justify-content:space-between;
@@ -64,26 +65,22 @@ body{display:flex;flex-direction:column;overflow:hidden}
 .top-nav{
   display:flex;
   align-items:center;
-  gap:8px;
-  background:var(--surface-muted);
-  border:1px solid var(--border);
-  border-radius:999px;
-  padding:4px;
+  gap:18px;
 }
 .top-nav .route-link{
   text-decoration:none;
   color:var(--text-dim);
-  font-size:.82rem;
+  font-size:.78rem;
   text-transform:uppercase;
-  letter-spacing:.06em;
+  letter-spacing:.08em;
   font-weight:700;
-  padding:8px 14px;
-  border-radius:999px;
+  padding:2px 0;
+  border-bottom:2px solid transparent;
   transition:all .15s ease;
 }
 .top-nav .route-link.active{
-  color:#fff;
-  background:var(--border-strong);
+  color:var(--text);
+  border-bottom-color:var(--red);
 }
 
 .pages{
@@ -155,9 +152,9 @@ body{display:flex;flex-direction:column;overflow:hidden}
 .btn-primary{background:var(--red);color:#fff}
 .btn-primary:hover:not(:disabled){background:#dc1414}
 .btn-secondary{background:var(--surface-muted);color:var(--text)}
-.btn-secondary:hover:not(:disabled){background:#ddd7cb}
-.btn-danger{background:var(--border-strong);color:#fff}
-.btn-danger:hover:not(:disabled){background:#2a2a2a}
+.btn-secondary:hover:not(:disabled){background:rgba(255,255,255,.12)}
+.btn-danger{background:#333;color:var(--text)}
+.btn-danger:hover:not(:disabled){background:#444}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 
 .hero-stats{
@@ -299,6 +296,185 @@ body{display:flex;flex-direction:column;overflow:hidden}
   line-height:1.45;
 }
 
+/* ---------- Infographic ---------- */
+.infographic-card{
+  padding:0!important;
+  overflow:hidden;
+}
+.infographic{padding:48px 36px 36px}
+.infographic-header{text-align:center;margin-bottom:44px}
+.infographic-header h3{
+  font-family:'Anton',sans-serif;
+  font-size:2.2rem;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:#fff;
+  font-weight:400;
+  margin-bottom:4px;
+}
+.infographic-header p{
+  color:rgba(244,241,236,.5);
+  font-size:.88rem;
+  line-height:1.6;
+}
+.infographic-steps{
+  display:flex;flex-direction:column;
+  gap:0;max-width:920px;margin:0 auto;
+}
+.ig-step{
+  padding:26px 28px;
+  background:rgba(255,255,255,.025);
+  border:1px solid rgba(255,255,255,.06);
+  border-radius:12px;
+}
+.ig-step-head{
+  display:flex;align-items:center;
+  gap:14px;margin-bottom:14px;
+}
+.ig-step-num{
+  width:42px;height:42px;border-radius:50%;
+  background:var(--red);color:#fff;
+  font-family:'Anton',sans-serif;font-size:1.05rem;
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;letter-spacing:.04em;
+}
+.ig-step-num.blue{background:var(--blue)}
+.ig-step-num.yellow{background:var(--yellow);color:#1a1917}
+.ig-step-num.dark{background:#333;color:#fff}
+.ig-step-head h4{
+  font-size:1.05rem;font-weight:700;
+  letter-spacing:.01em;color:#fff;
+}
+.ig-step-desc{
+  color:rgba(244,241,236,.6);
+  font-size:.84rem;line-height:1.65;
+  margin-bottom:18px;max-width:640px;
+}
+.ig-step-desc strong{color:#fff}
+.ig-grid{
+  display:grid;
+  grid-template-columns:repeat(6,1fr);
+  gap:8px;margin-bottom:16px;
+}
+.ig-img{
+  aspect-ratio:1;border-radius:6px;
+  overflow:hidden;
+  border:2px solid rgba(255,255,255,.08);
+  position:relative;
+  transition:all .3s ease;
+}
+.ig-img img{width:100%;height:100%;object-fit:cover;display:block}
+.ig-img.ig-selected{
+  border-color:var(--red);
+  box-shadow:0 0 20px rgba(204,0,0,.4),0 0 0 1px var(--red);
+  transform:scale(1.04);z-index:1;
+}
+.ig-img.ig-selected::after{
+  content:'✓';
+  position:absolute;top:5px;right:5px;
+  width:20px;height:20px;border-radius:50%;
+  background:var(--red);color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.65rem;font-weight:700;
+}
+.ig-math{
+  background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.07);
+  border-radius:8px;padding:14px 18px;
+  font-family:'Courier New','Menlo',monospace;
+  font-size:.78rem;line-height:1.85;
+  color:rgba(244,241,236,.75);
+  overflow-x:auto;
+}
+.ig-math+.ig-math{margin-top:10px}
+.ig-math-label{
+  color:var(--yellow);
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:700;font-size:.63rem;
+  text-transform:uppercase;letter-spacing:.11em;
+  display:block;margin-bottom:4px;
+}
+.ig-math .v{color:#7cb7ff}
+.ig-math .op{color:var(--red)}
+.ig-math .kw{color:var(--yellow)}
+.ig-crossover{
+  display:flex;align-items:center;
+  justify-content:center;gap:18px;
+  margin:20px 0;flex-wrap:wrap;
+}
+.ig-crossover .ig-par{text-align:center}
+.ig-crossover .ig-par img{
+  width:120px;height:120px;
+  border-radius:8px;display:block;
+  border:2px solid rgba(255,255,255,.1);
+}
+.ig-crossover .ig-par .lbl{
+  font-size:.68rem;margin-top:6px;
+  color:rgba(244,241,236,.45);
+  text-transform:uppercase;letter-spacing:.07em;
+}
+.ig-crossover .ig-sym{
+  font-family:'Anton',sans-serif;
+  font-size:1.6rem;
+  color:rgba(244,241,236,.25);
+}
+.ig-crossover .ig-child-wrap{text-align:center}
+.ig-crossover .ig-child-wrap img{
+  width:140px;height:140px;
+  border-radius:10px;display:block;
+  border:2px solid var(--yellow);
+  box-shadow:0 0 28px rgba(232,200,0,.2);
+}
+.ig-crossover .ig-child-wrap .lbl{
+  font-size:.68rem;margin-top:6px;
+  color:var(--yellow);
+  text-transform:uppercase;letter-spacing:.07em;
+  font-weight:700;
+}
+.ig-connector{
+  display:flex;justify-content:center;
+  padding:6px 0;
+}
+.ig-connector span{
+  display:block;width:2px;height:28px;
+  background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(255,255,255,.04));
+  border-radius:1px;
+}
+.ig-regen{
+  display:flex;justify-content:center;margin-top:16px;
+}
+.ig-regen button{
+  background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.1);
+  color:rgba(244,241,236,.55);
+  border-radius:8px;padding:9px 18px;
+  font-size:.75rem;font-weight:600;
+  font-family:inherit;text-transform:uppercase;
+  letter-spacing:.06em;cursor:pointer;
+  transition:all .15s ease;
+}
+.ig-regen button:hover{
+  background:rgba(255,255,255,.1);color:#fff;
+}
+.ig-loading{
+  text-align:center;padding:48px 20px;
+  color:rgba(244,241,236,.35);
+  font-size:.88rem;
+}
+@media(max-width:900px){
+  .ig-grid{grid-template-columns:repeat(3,1fr)}
+  .infographic{padding:28px 16px}
+  .ig-crossover .ig-par img{width:96px;height:96px}
+  .ig-crossover .ig-child-wrap img{width:110px;height:110px}
+}
+@media(max-width:620px){
+  .infographic-header h3{font-size:1.5rem}
+  .ig-step{padding:18px 16px}
+  .ig-crossover{gap:12px}
+  .ig-crossover .ig-par img{width:80px;height:80px}
+  .ig-crossover .ig-child-wrap img{width:96px;height:96px}
+}
+
 /* ---------- Evolve ---------- */
 .app-body{
   height:100%;
@@ -308,8 +484,8 @@ body{display:flex;flex-direction:column;overflow:hidden}
 .sidebar{
   width:var(--sidebar);
   flex-shrink:0;
-  background:var(--surface);
-  border-right:1px solid var(--border);
+  background:transparent;
+  border-right:none;
   padding:16px;
   display:flex;
   flex-direction:column;
@@ -317,18 +493,18 @@ body{display:flex;flex-direction:column;overflow:hidden}
   overflow-y:auto;
 }
 .panel-card{
-  border:1px solid var(--border);
-  border-radius:10px;
-  background:var(--surface-soft);
-  padding:12px;
+  border:none;
+  border-radius:0;
+  background:transparent;
+  padding:0;
 }
 .panel-head{
-  font-size:.68rem;
+  font-size:.66rem;
   text-transform:uppercase;
-  letter-spacing:.09em;
+  letter-spacing:.11em;
   color:var(--text-dim);
   font-weight:700;
-  margin-bottom:9px;
+  margin-bottom:8px;
 }
 .panel-hint{
   font-size:.72rem;
@@ -343,28 +519,28 @@ body{display:flex;flex-direction:column;overflow:hidden}
 }
 .gen-badge{
   flex:1;
-  text-align:center;
-  background:var(--border-strong);
-  color:#fff;
-  border-radius:8px;
+  text-align:left;
+  background:transparent;
+  color:var(--text);
+  border-radius:0;
   font-size:.84rem;
   font-weight:600;
-  padding:9px 0;
+  padding:0;
 }
-.gen-badge strong{color:var(--yellow)}
+.gen-badge strong{color:var(--red)}
 .btn-nav{
-  border:none;
+  border:1px solid var(--border);
   width:34px;
   height:34px;
   border-radius:8px;
-  background:var(--surface-muted);
+  background:transparent;
   color:var(--text);
   display:inline-flex;
   align-items:center;
   justify-content:center;
   cursor:pointer;
 }
-.btn-nav:hover:not(:disabled){background:#ddd7cb}
+.btn-nav:hover:not(:disabled){background:rgba(255,255,255,.08)}
 .btn-nav:disabled{opacity:.35;cursor:not-allowed}
 .btn-nav svg{width:16px;height:16px}
 
@@ -406,7 +582,7 @@ body{display:flex;flex-direction:column;overflow:hidden}
   flex:1;
   height:4px;
   border-radius:999px;
-  background:var(--border);
+  background:rgba(255,255,255,.15);
 }
 .slider-row input[type="range"]::-webkit-slider-thumb{
   -webkit-appearance:none;
@@ -441,9 +617,9 @@ body{display:flex;flex-direction:column;overflow:hidden}
 }
 .sidebar-footer{
   margin-top:auto;
-  border:1px dashed var(--border);
-  border-radius:10px;
-  padding:11px;
+  border:none;
+  border-radius:0;
+  padding:4px 0 0;
   font-size:.73rem;
   color:var(--text-dim);
   line-height:1.55;
@@ -505,7 +681,7 @@ body{display:flex;flex-direction:column;overflow:hidden}
   position:absolute;
   top:5px;
   left:5px;
-  background:#111;
+  background:rgba(0,0,0,.55);
   color:#fff;
   border-radius:6px;
   font-size:.68rem;
@@ -519,8 +695,8 @@ body{display:flex;flex-direction:column;overflow:hidden}
   width:22px;
   height:22px;
   border-radius:50%;
-  border:2px solid rgba(0,0,0,.18);
-  background:rgba(255,255,255,.7);
+  border:2px solid rgba(255,255,255,.2);
+  background:rgba(255,255,255,.15);
   display:flex;
   align-items:center;
   justify-content:center;
@@ -540,7 +716,7 @@ body{display:flex;flex-direction:column;overflow:hidden}
 .overlay{
   position:fixed;
   inset:0;
-  background:rgba(244,241,236,.88);
+  background:rgba(0,0,0,.75);
   display:flex;
   align-items:center;
   justify-content:center;
@@ -608,7 +784,7 @@ body{display:flex;flex-direction:column;overflow:hidden}
   .sidebar{
     width:100%;
     border-right:none;
-    border-bottom:1px solid var(--border);
+    border-bottom:none;
     max-height:52vh;
   }
   .home{padding:14px}
@@ -697,36 +873,25 @@ body{display:flex;flex-direction:column;overflow:hidden}
             <p>Oblique projected architectons with elevation, depth shading, dramatic diagonal fields, and structural clusters.</p>
             <div class="gallery-grid" id="home-hadid-grid"></div>
           </div>
+          <div class="style-panel">
+            <h4>City Plans (Maps 3D)</h4>
+            <p>Abstract urban compositions inspired by master plans: axial boulevards, radial streets, hexagonal blocks, garden districts.</p>
+            <div class="gallery-grid" id="home-maps-grid"></div>
+          </div>
         </div>
       </article>
 
-      <article class="home-card">
-        <div class="home-card-head">
-          <div>
-            <h3>How the artworks are generated</h3>
-            <p>The loop that drives every generation.</p>
+      <article class="home-card infographic-card">
+        <div class="infographic">
+          <div class="infographic-header">
+            <h3>The Evolution of Art</h3>
+            <p>How a genetic algorithm turns your aesthetic taste into paintings</p>
           </div>
-        </div>
-        <div class="how-grid">
-          <div class="how-step">
-            <span class="step-no">1</span>
-            <strong>Initialize population</strong>
-            <span>Each individual starts as a genome of shapes or neural parameters, then gets rendered into a painting.</span>
+          <div class="infographic-steps" id="ig-steps">
+            <div class="ig-loading">Generating evolution demo&hellip;</div>
           </div>
-          <div class="how-step">
-            <span class="step-no">2</span>
-            <strong>Select parents</strong>
-            <span>You click the thumbnails you like; this acts as the fitness signal for interactive selection.</span>
-          </div>
-          <div class="how-step">
-            <span class="step-no">3</span>
-            <strong>Breed + mutate</strong>
-            <span>Selected genomes are recombined and randomly perturbed in size, position, color, depth, and structure.</span>
-          </div>
-          <div class="how-step">
-            <span class="step-no">4</span>
-            <strong>Render next generation</strong>
-            <span>The new genomes are rendered with texture and post-processing, producing the next grid to curate.</span>
+          <div class="ig-regen">
+            <button id="ig-regen-btn">&circlearrowright; Regenerate demo</button>
           </div>
         </div>
       </article>
@@ -757,6 +922,7 @@ body{display:flex;flex-direction:column;overflow:hidden}
             <select id="sel-engine">
               <option value="shapes" selected>Shapes</option>
               <option value="hadid">Hadid 3D</option>
+              <option value="maps">Maps 3D</option>
               <option value="cppn">CPPN</option>
             </select>
           </div>
@@ -830,6 +996,14 @@ body{display:flex;flex-direction:column;overflow:hidden}
             </button>
             <div class="btn-row">
               <button class="btn btn-secondary" id="btn-export" disabled>Export</button>
+              <button class="btn btn-secondary" id="btn-export-land" disabled title="Landscape">
+                <svg width="14" height="10" viewBox="0 0 14 10" fill="none" stroke="currentColor" stroke-width="1.5"><rect x=".75" y=".75" width="12.5" height="8.5" rx="1"/></svg>
+              </button>
+              <button class="btn btn-secondary" id="btn-export-port" disabled title="Portrait">
+                <svg width="10" height="14" viewBox="0 0 10 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x=".75" y=".75" width="8.5" height="12.5" rx="1"/></svg>
+              </button>
+            </div>
+            <div class="btn-row">
               <button class="btn btn-secondary" id="btn-export-all">Export all</button>
             </div>
             <div class="btn-row">
@@ -880,6 +1054,7 @@ const homeGoEvolve = $('#home-go-evolve');
 const homeLiveGrid = $('#home-live-grid');
 const homeMalevichGrid = $('#home-malevich-grid');
 const homeHadidGrid = $('#home-hadid-grid');
+const homeMapsGrid = $('#home-maps-grid');
 const homeGen = $('#home-gen');
 const homePop = $('#home-pop');
 const homeLiveMeta = $('#home-live-meta');
@@ -891,6 +1066,8 @@ const genNum = $('#gen-num');
 const selInfo = $('#sel-info');
 const btnEvolve = $('#btn-evolve');
 const btnExport = $('#btn-export');
+const btnExportLand = $('#btn-export-land');
+const btnExportPort = $('#btn-export-port');
 const btnExportAll = $('#btn-export-all');
 const btnSave = $('#btn-save');
 const btnReset = $('#btn-reset');
@@ -946,6 +1123,7 @@ async function apiFetch(url, body, withLoading = true){
 
 function engineLabel(engine){
   if(engine === 'hadid') return 'Hadid 3D';
+  if(engine === 'maps') return 'Maps 3D';
   if(engine === 'cppn') return 'CPPN';
   return 'Shapes';
 }
@@ -967,6 +1145,8 @@ function updateSelectionUI(){
   btnEvolve.disabled = count === 0;
   const singleSelected = count === 1;
   btnExport.disabled = !singleSelected;
+  btnExportLand.disabled = !singleSelected;
+  btnExportPort.disabled = !singleSelected;
   btnSave.disabled = !singleSelected;
 
   if(count === 0) selInfo.textContent = 'Click thumbnails to select parents';
@@ -987,6 +1167,146 @@ function renderHomeGallery(container, images){
       <img src="data:image/png;base64,${b64}" alt="Artwork ${i}">
     </div>
   `).join('');
+}
+
+async function loadInfographic(refresh){
+  const box = document.getElementById('ig-steps');
+  if(!box) return;
+  box.innerHTML = '<div class="ig-loading">Generating evolution demo&hellip;</div>';
+  try{
+    const url = refresh ? '/api/infographic?refresh=1' : '/api/infographic';
+    const d = await apiFetch(url, undefined, false);
+    const sel = new Set(d.selected);
+    box.innerHTML =
+      '<div class="ig-step">'+
+        '<div class="ig-step-head">'+
+          '<div class="ig-step-num">01</div>'+
+          '<h4>The Genome &mdash; Random Initialization</h4>'+
+        '</div>'+
+        '<p class="ig-step-desc">'+
+          'A population of artworks is generated randomly. Each painting is encoded as a '+
+          '<strong>genome</strong> &mdash; a hierarchical tree of shape groups, where every shape '+
+          'carries evolvable parameters for position, size, rotation, color, and opacity.'+
+        '</p>'+
+        '<div class="ig-grid">'+
+          d.parents.map(function(b,i){
+            return '<div class="ig-img"><img src="data:image/png;base64,'+b+'" alt="Genome '+i+'"></div>';
+          }).join('')+
+        '</div>'+
+        '<div class="ig-math">'+
+          '<span class="ig-math-label">Genome Structure</span>'+
+          '<span class="v">G</span> = { groups: [<span class="v">G\u2081</span>, <span class="v">G\u2082</span>, \u2026, <span class="v">G\u2099</span>] }<br>'+
+          '<span class="v">G\u1d62</span> = { anchor: <span class="kw">Shape</span>, satellites: [<span class="v">S\u2081</span>, \u2026, <span class="v">S\u2098</span>] }<br>'+
+          '<span class="kw">Shape</span> = (<span class="v">kind</span>, <span class="v">x</span>, <span class="v">y</span>, <span class="v">w</span>, <span class="v">h</span>, <span class="v">\u03b8</span>, <span class="v">color</span>, <span class="v">\u03b1</span>)<br>'+
+          '<br>'+
+          '<span class="v">x</span>, <span class="v">y</span>, <span class="v">w</span>, <span class="v">h</span> <span class="op">\u2208</span> [0, 1] &nbsp;&nbsp; '+
+          '<span class="v">\u03b8</span> <span class="op">\u2208</span> [0, 2\u03c0] &nbsp;&nbsp; '+
+          '<span class="v">\u03b1</span> <span class="op">\u2208</span> [0, 1]<br>'+
+          '<span class="v">kind</span> <span class="op">\u2208</span> { square, rect, circle, cross, trapezoid, triangle, line, ellipse, semicircle }'+
+        '</div>'+
+      '</div>'+
+      '<div class="ig-connector"><span></span></div>'+
+      '<div class="ig-step">'+
+        '<div class="ig-step-head">'+
+          '<div class="ig-step-num blue">02</div>'+
+          '<h4>Interactive Selection &mdash; You Are the Fitness Function</h4>'+
+        '</div>'+
+        '<p class="ig-step-desc">'+
+          'In traditional evolution, nature selects the fittest. Here, <strong>you</strong> are the '+
+          'selective pressure. Click the paintings you find most compelling &mdash; they become parents '+
+          'of the next generation.'+
+        '</p>'+
+        '<div class="ig-grid">'+
+          d.parents.map(function(b,i){
+            return '<div class="ig-img'+(sel.has(i)?' ig-selected':'')+'"><img src="data:image/png;base64,'+b+'" alt="Genome '+i+'"></div>';
+          }).join('')+
+        '</div>'+
+        '<div class="ig-math">'+
+          '<span class="ig-math-label">Fitness Function (Interactive Evolution)</span>'+
+          '<span class="v">f</span>(<span class="v">G</span>) <span class="op">=</span> '+
+          '1 &nbsp;if selected by user, &nbsp;0 &nbsp;otherwise<br>'+
+          '<br>'+
+          '<span class="ig-math-label">Tournament Selection (k = 3)</span>'+
+          'Pick <span class="v">k</span> random individuals from the population \u2192<br>'+
+          'the one with highest <span class="v">f</span>(<span class="v">G</span>) becomes a parent for crossover'+
+        '</div>'+
+      '</div>'+
+      '<div class="ig-connector"><span></span></div>'+
+      '<div class="ig-step">'+
+        '<div class="ig-step-head">'+
+          '<div class="ig-step-num yellow">03</div>'+
+          '<h4>Crossover + Mutation &mdash; Breeding New Art</h4>'+
+        '</div>'+
+        '<p class="ig-step-desc">'+
+          'Selected parents are paired. Their genomes are recombined via <strong>uniform crossover</strong>, '+
+          'then each gene is randomly <strong>mutated</strong> with Gaussian noise &mdash; introducing variation '+
+          'while preserving the aesthetic DNA you selected for.'+
+        '</p>'+
+        '<div class="ig-crossover">'+
+          '<div class="ig-par">'+
+            '<img src="data:image/png;base64,'+d.parent_a+'" alt="Parent A">'+
+            '<div class="lbl">Parent A</div>'+
+          '</div>'+
+          '<div class="ig-sym">\u00d7</div>'+
+          '<div class="ig-par">'+
+            '<img src="data:image/png;base64,'+d.parent_b+'" alt="Parent B">'+
+            '<div class="lbl">Parent B</div>'+
+          '</div>'+
+          '<div class="ig-sym">\u2192</div>'+
+          '<div class="ig-child-wrap">'+
+            '<img src="data:image/png;base64,'+d.child_demo+'" alt="Offspring">'+
+            '<div class="lbl">Offspring</div>'+
+          '</div>'+
+        '</div>'+
+        '<div class="ig-math">'+
+          '<span class="ig-math-label">Uniform Crossover (rate <span class="v">p</span> = 0.7)</span>'+
+          'For each shape group <span class="v">i</span>:<br>'+
+          '&nbsp;&nbsp;<span class="v">child</span>.<span class="v">group\u1d62</span> <span class="op">=</span> '+
+          '<span class="v">parentA</span>.<span class="v">group\u1d62</span> &nbsp;with prob 0.5<br>'+
+          '&nbsp;&nbsp;<span class="v">child</span>.<span class="v">group\u1d62</span> <span class="op">=</span> '+
+          '<span class="v">parentB</span>.<span class="v">group\u1d62</span> &nbsp;with prob 0.5'+
+        '</div>'+
+        '<div class="ig-math">'+
+          '<span class="ig-math-label">Gaussian Mutation</span>'+
+          'For each continuous parameter <span class="v">x</span>:<br>'+
+          '&nbsp;&nbsp;<span class="v">x\u2032</span> <span class="op">=</span> clamp( <span class="v">x</span> + '+
+          '<span class="v">N</span>(0, <span class="v">\u03c3</span>\u00b2) , 0, 1 )<br>'+
+          '&nbsp;&nbsp;<span class="v">\u03c3</span> <span class="op">=</span> <span class="v">mutation_strength</span> '+
+          '\u00d7 <span class="v">base_range</span><br>'+
+          '<br>'+
+          'Discrete params (shape kind, color index) mutate via random replacement with prob <span class="v">p</span>'+
+        '</div>'+
+      '</div>'+
+      '<div class="ig-connector"><span></span></div>'+
+      '<div class="ig-step">'+
+        '<div class="ig-step-head">'+
+          '<div class="ig-step-num dark">04</div>'+
+          '<h4>Next Generation &mdash; The Cycle Continues</h4>'+
+        '</div>'+
+        '<p class="ig-step-desc">'+
+          'The offspring form a new population. Each generation inherits visual traits from compositions '+
+          'you found compelling, while mutations introduce unexpected variations &mdash; a '+
+          '<strong>directed random walk through aesthetic space</strong>, guided entirely by your taste.'+
+        '</p>'+
+        '<div class="ig-grid">'+
+          d.children.map(function(b,i){
+            return '<div class="ig-img"><img src="data:image/png;base64,'+b+'" alt="Child '+i+'"></div>';
+          }).join('')+
+        '</div>'+
+        '<div class="ig-math">'+
+          '<span class="ig-math-label">The Evolutionary Loop</span>'+
+          '<span class="kw">repeat</span> {<br>'+
+          '&nbsp;&nbsp;render(<span class="v">population</span>)<br>'+
+          '&nbsp;&nbsp;<span class="v">selected</span> <span class="op">\u2190</span> user_picks(<span class="v">thumbnails</span>)<br>'+
+          '&nbsp;&nbsp;<span class="v">parents</span> <span class="op">\u2190</span> tournament_select(<span class="v">population</span>, <span class="v">selected</span>)<br>'+
+          '&nbsp;&nbsp;<span class="v">offspring</span> <span class="op">\u2190</span> crossover(<span class="v">parents</span>) <span class="op">\u2295</span> mutate(<span class="v">\u03c3</span>)<br>'+
+          '&nbsp;&nbsp;<span class="v">population</span> <span class="op">\u2190</span> <span class="v">offspring</span> <span class="op">\u222a</span> elite(<span class="v">population</span>)<br>'+
+          '}'+
+        '</div>'+
+      '</div>';
+  }catch(e){
+    box.innerHTML = '<div class="ig-loading">Could not load demo &mdash; start the server and refresh.</div>';
+  }
 }
 
 function refreshHomeLive(data){
@@ -1068,6 +1388,8 @@ async function loadHomeContent(forceSampleRefresh = false){
   refreshHomeLive(stateData);
   renderHomeGallery(homeMalevichGrid, samples.malevich || []);
   renderHomeGallery(homeHadidGrid, samples.hadid || []);
+  renderHomeGallery(homeMapsGrid, samples.maps || []);
+  loadInfographic(forceSampleRefresh);
 }
 
 function routeFromPath(pathname){
@@ -1148,15 +1470,25 @@ btnEvolve.addEventListener('click', async () => {
   renderGrid(data);
 });
 
-btnExport.addEventListener('click', async () => {
+async function doExport(orientation) {
   const idx = [...selected][0];
-  const data = await apiFetch('/api/export', { index: idx });
-  const src = 'data:image/png;base64,' + data.image;
-  modalImg.src = src;
-  modalDownload.href = src;
-  modalDownload.download = `hires_${genNum.textContent.padStart(4, '0')}_${String(idx).padStart(2, '0')}.png`;
-  modalBackdrop.classList.remove('hidden');
-});
+  showLoading();
+  try {
+    const data = await apiFetch('/api/export', { index: idx, orientation });
+    const src = 'data:image/png;base64,' + data.image;
+    modalImg.src = src;
+    modalDownload.href = src;
+    const suffix = orientation !== 'square' ? `_${orientation}` : '';
+    modalDownload.download = `hires_${genNum.textContent.padStart(4, '0')}_${String(idx).padStart(2, '0')}${suffix}.png`;
+    modalBackdrop.classList.remove('hidden');
+  } finally {
+    hideLoading();
+  }
+}
+
+btnExport.addEventListener('click', () => doExport('square'));
+btnExportLand.addEventListener('click', () => doExport('landscape'));
+btnExportPort.addEventListener('click', () => doExport('portrait'));
 
 btnExportAll.addEventListener('click', async () => {
   showLoading();
@@ -1219,6 +1551,9 @@ homeGoEvolve.addEventListener('click', async () => {
 });
 homeRefresh.addEventListener('click', async () => {
   await loadHomeContent(true);
+});
+document.getElementById('ig-regen-btn').addEventListener('click', () => {
+  loadInfographic(true);
 });
 
 window.addEventListener('popstate', async () => {

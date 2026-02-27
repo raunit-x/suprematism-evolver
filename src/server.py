@@ -25,12 +25,12 @@ from pydantic import BaseModel
 
 from src.neat.population import Population
 from src.cppn.renderer import render_to_image
-from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE, HADID_PALETTE
+from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE, HADID_PALETTE, MAPS_PALETTE
 from src.art.fitness import compute_style_fitness
 from src.cppn.activations import MALEVICH_ACTIVATIONS, ALL_ACTIVATIONS
 
 from src.shapes.population import ShapePopulation
-from src.shapes.renderer import render_genome
+from src.shapes.renderer import render_genome, render_genome_extended
 import src.shapes.renderer as _shape_renderer
 
 OUTPUT_DIR = Path("output")
@@ -81,6 +81,7 @@ class AppState:
         self._history_idx: int = -1
         self._max_history: int = 200
         self._home_samples_cache: dict[str, list[str]] | None = None
+        self._infographic_cache: dict | None = None
 
     # ---- CPPN helpers ----
 
@@ -113,10 +114,17 @@ class AppState:
     def _shape_palette(self) -> list[tuple]:
         if self.engine == "hadid":
             return list(HADID_PALETTE.values())
+        if self.engine == "maps":
+            return list(MAPS_PALETTE.values())
         return list(SUPREMATIST_PALETTE.values())
 
     def _build_shape_config(self) -> dict:
-        pal = HADID_PALETTE if self.engine == "hadid" else SUPREMATIST_PALETTE
+        if self.engine == "hadid":
+            pal = HADID_PALETTE
+        elif self.engine == "maps":
+            pal = MAPS_PALETTE
+        else:
+            pal = SUPREMATIST_PALETTE
         return {
             "pop_size": self.pop_size,
             "num_palette_colors": len(pal),
@@ -129,10 +137,12 @@ class AppState:
     # ---- Initialization ----
 
     def initialize(self):
-        if self.engine in ("shapes", "hadid"):
+        if self.engine in ("shapes", "hadid", "maps"):
             self.shape_pop = ShapePopulation(self._build_shape_config())
             if self.engine == "hadid":
                 self.shape_pop.initialize_architecton()
+            elif self.engine == "maps":
+                self.shape_pop.initialize_maps()
             else:
                 self.shape_pop.initialize()
             self.pop = None
@@ -167,7 +177,7 @@ class AppState:
         self._history_idx = idx
         self._cached_thumbnails = list(snap.thumbnails)
 
-        if self.engine in ("shapes", "hadid") and self.shape_pop:
+        if self.engine in ("shapes", "hadid", "maps") and self.shape_pop:
             self.shape_pop.genomes = [g.copy() for g in snap.genomes]
             self.shape_pop.generation = snap.generation
 
@@ -195,7 +205,7 @@ class AppState:
         self._cached_thumbnails = []
         self._sync_render_settings()
 
-        if self.engine in ("shapes", "hadid"):
+        if self.engine in ("shapes", "hadid", "maps"):
             palette = self._shape_palette()
             for genome in self.shape_pop.genomes:
                 img = render_genome(genome, self.thumb_size, self.thumb_size, palette)
@@ -203,14 +213,25 @@ class AppState:
         else:
             palette_array = get_palette_array(self.palette)
             self._networks = self.pop.get_networks()
-            for net in self._networks:
-                img = render_to_image(net, self.thumb_size, self.thumb_size, self.color_mode, palette_array)
+            for i, net in enumerate(self._networks):
+                g = self.pop.genomes[i]
+                img = render_to_image(
+                    net, self.thumb_size, self.thumb_size,
+                    self.color_mode, palette_array,
+                    focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                    armature_angle=g.comp_armature_angle,
+                )
                 self._cached_thumbnails.append(_image_to_base64(img))
 
     def _render_home_style_samples(self, style: str, count: int = 6, size: int = 280) -> list[str]:
         """Generate a small gallery for the Home page without mutating live state."""
-        style = "hadid" if style == "hadid" else "shapes"
-        palette = list(HADID_PALETTE.values()) if style == "hadid" else list(SUPREMATIST_PALETTE.values())
+        if style == "hadid":
+            palette = list(HADID_PALETTE.values())
+        elif style == "maps":
+            palette = list(MAPS_PALETTE.values())
+        else:
+            style = "shapes"
+            palette = list(SUPREMATIST_PALETTE.values())
 
         config = {
             "pop_size": count,
@@ -223,6 +244,8 @@ class AppState:
         demo_pop = ShapePopulation(config)
         if style == "hadid":
             demo_pop.initialize_architecton()
+        elif style == "maps":
+            demo_pop.initialize_maps()
         else:
             demo_pop.initialize()
 
@@ -237,18 +260,19 @@ class AppState:
             self._home_samples_cache = {
                 "malevich": self._render_home_style_samples("shapes"),
                 "hadid": self._render_home_style_samples("hadid"),
+                "maps": self._render_home_style_samples("maps"),
             }
         return self._home_samples_cache
 
     # ---- State payload ----
 
     def _current_genomes(self) -> list:
-        if self.engine in ("shapes", "hadid"):
+        if self.engine in ("shapes", "hadid", "maps"):
             return self.shape_pop.genomes
         return self.pop.genomes
 
     def _current_generation(self) -> int:
-        if self.engine in ("shapes", "hadid"):
+        if self.engine in ("shapes", "hadid", "maps"):
             return self.shape_pop.generation
         return self.pop.generation
 
@@ -273,7 +297,7 @@ class AppState:
     # ---- Evolve ----
 
     def evolve(self, selected: list[int]):
-        if self.engine in ("shapes", "hadid"):
+        if self.engine in ("shapes", "hadid", "maps"):
             self.shape_pop.mutation_strength = self.mutation_strength
             self.shape_pop.evolve_with_selection(selected)
         else:
@@ -287,7 +311,12 @@ class AppState:
 
             if self.mode != "malevich":
                 for i, net in enumerate(networks):
-                    img = render_to_image(net, 64, 64, self.color_mode)
+                    g = self.pop.genomes[i]
+                    img = render_to_image(
+                        net, 64, 64, self.color_mode,
+                        focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                        armature_angle=g.comp_armature_angle,
+                    )
                     img_np = np.array(img.convert("RGB")).astype(np.float64) / 255.0
                     style_bonus = compute_style_fitness(img_np, self.mode, weight=0.2)
                     fitness[i] += style_bonus
@@ -300,20 +329,31 @@ class AppState:
 
     # ---- Export ----
 
-    def export_hires(self, index: int) -> str:
+    def export_hires(self, index: int, orientation: str = "square") -> str:
         OUTPUT_DIR.mkdir(exist_ok=True)
         gen = self._current_generation()
 
-        if self.engine in ("shapes", "hadid"):
+        if self.engine in ("shapes", "hadid", "maps"):
             palette = self._shape_palette()
             genome = self.shape_pop.genomes[index]
-            img = render_genome(genome, self.hires_size, self.hires_size, palette)
+            if orientation in ("landscape", "portrait"):
+                img = render_genome_extended(
+                    genome, self.hires_size, orientation, palette)
+            else:
+                img = render_genome(genome, self.hires_size, self.hires_size, palette)
         else:
             palette_array = get_palette_array(self.palette)
             net = self._networks[index]
-            img = render_to_image(net, self.hires_size, self.hires_size, self.color_mode, palette_array)
+            g = self.pop.genomes[index]
+            img = render_to_image(
+                net, self.hires_size, self.hires_size,
+                self.color_mode, palette_array,
+                focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                armature_angle=g.comp_armature_angle,
+            )
 
-        path = OUTPUT_DIR / f"hires_{gen:04d}_{index:02d}.png"
+        suffix = f"_{orientation}" if orientation != "square" else ""
+        path = OUTPUT_DIR / f"hires_{gen:04d}_{index:02d}{suffix}.png"
         img.save(path)
         return _image_to_base64(img)
 
@@ -325,13 +365,19 @@ class AppState:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             genomes = self._current_genomes()
             for i, genome in enumerate(genomes):
-                if self.engine in ("shapes", "hadid"):
+                if self.engine in ("shapes", "hadid", "maps"):
                     palette = self._shape_palette()
                     img = render_genome(genome, resolution, resolution, palette)
                 else:
                     palette_array = get_palette_array(self.palette)
                     net = self._networks[i]
-                    img = render_to_image(net, resolution, resolution, self.color_mode, palette_array)
+                    g = self.pop.genomes[i]
+                    img = render_to_image(
+                        net, resolution, resolution,
+                        self.color_mode, palette_array,
+                        focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                        armature_angle=g.comp_armature_angle,
+                    )
 
                 img_buf = io.BytesIO()
                 img.save(img_buf, format="PNG")
@@ -347,7 +393,7 @@ class AppState:
         gen = self._current_generation()
         path = OUTPUT_DIR / f"genome_{gen:04d}_{index:02d}.json"
 
-        if self.engine in ("shapes", "hadid"):
+        if self.engine in ("shapes", "hadid", "maps"):
             self.shape_pop.save_genome(index, path)
         else:
             self.pop.save_genome(index, path)
@@ -374,6 +420,10 @@ class EvolveRequest(BaseModel):
 class IndexRequest(BaseModel):
     index: int
 
+class ExportRequest(BaseModel):
+    index: int
+    orientation: str = "square"
+
 class ResetRequest(BaseModel):
     engine: str = "shapes"
     mode: str = "malevich"
@@ -396,7 +446,7 @@ class SettingsRequest(BaseModel):
 
 @app.get("/api/state")
 def api_state():
-    if state.engine in ("shapes", "hadid") and state.shape_pop is None:
+    if state.engine in ("shapes", "hadid", "maps") and state.shape_pop is None:
         state.initialize()
     elif state.engine == "cppn" and state.pop is None:
         state.initialize()
@@ -405,7 +455,7 @@ def api_state():
 
 @app.post("/api/evolve")
 def api_evolve(req: EvolveRequest):
-    if state.engine in ("shapes", "hadid") and state.shape_pop is None:
+    if state.engine in ("shapes", "hadid", "maps") and state.shape_pop is None:
         state.initialize()
     elif state.engine == "cppn" and state.pop is None:
         state.initialize()
@@ -414,14 +464,15 @@ def api_evolve(req: EvolveRequest):
 
 
 @app.post("/api/export")
-def api_export(req: IndexRequest):
+def api_export(req: ExportRequest):
     genomes = state._current_genomes()
     if not genomes:
         return JSONResponse({"error": "No population"}, status_code=400)
     if not (0 <= req.index < len(genomes)):
         return JSONResponse({"error": "Invalid index"}, status_code=400)
-    b64 = state.export_hires(req.index)
-    return JSONResponse({"image": b64, "index": req.index})
+    orientation = req.orientation if req.orientation in ("square", "landscape", "portrait") else "square"
+    b64 = state.export_hires(req.index, orientation=orientation)
+    return JSONResponse({"image": b64, "index": req.index, "orientation": orientation})
 
 
 @app.get("/api/export_all")
@@ -458,6 +509,7 @@ def api_reset(req: ResetRequest):
     state.pop_size = req.pop_size
     state.mutation_strength = req.mutation_strength
     state.crossover_rate = req.crossover_rate
+    state._infographic_cache = None
     state.initialize()
     return JSONResponse(state.get_state_payload())
 
@@ -468,11 +520,11 @@ def api_settings(req: SettingsRequest):
     rerender = False
     if req.mutation_strength is not None:
         state.mutation_strength = max(0.0, min(3.0, req.mutation_strength))
-        if state.engine in ("shapes", "hadid") and state.shape_pop:
+        if state.engine in ("shapes", "hadid", "maps") and state.shape_pop:
             state.shape_pop.mutation_strength = state.mutation_strength
     if req.crossover_rate is not None:
         state.crossover_rate = max(0.0, min(1.0, req.crossover_rate))
-        if state.engine in ("shapes", "hadid") and state.shape_pop:
+        if state.engine in ("shapes", "hadid", "maps") and state.shape_pop:
             state.shape_pop.crossover_rate = state.crossover_rate
     if req.grain_strength is not None:
         state.grain_strength = max(0.0, min(30.0, req.grain_strength))
@@ -491,6 +543,57 @@ def api_settings(req: SettingsRequest):
 @app.get("/api/home_samples")
 def api_home_samples():
     return JSONResponse(state.get_home_samples())
+
+
+@app.get("/api/infographic")
+def api_infographic(refresh: int = 0):
+    """Generate demo images showing the evolution process for the infographic."""
+    if not refresh and state._infographic_cache:
+        return JSONResponse(state._infographic_cache)
+
+    palette = list(SUPREMATIST_PALETTE.values())
+    size = 280
+    state._sync_render_settings()
+
+    config = {
+        "pop_size": 6,
+        "num_palette_colors": len(palette),
+        "elitism": 1,
+        "crossover_rate": 0.7,
+        "tournament_k": 2,
+        "mutation_strength": 1.0,
+    }
+
+    demo = ShapePopulation(config)
+    demo.initialize()
+
+    parents = [
+        _image_to_base64(render_genome(g, size, size, palette))
+        for g in demo.genomes
+    ]
+
+    sel = [1, 4]
+    parent_a = parents[sel[0]]
+    parent_b = parents[sel[1]]
+
+    demo.evolve_with_selection(sel)
+
+    children = [
+        _image_to_base64(render_genome(g, size, size, palette))
+        for g in demo.genomes
+    ]
+
+    result = {
+        "parents": parents,
+        "selected": sel,
+        "parent_a": parent_a,
+        "parent_b": parent_b,
+        "child_demo": children[0],
+        "children": children,
+    }
+
+    state._infographic_cache = result
+    return JSONResponse(result)
 
 
 @app.post("/api/prev")

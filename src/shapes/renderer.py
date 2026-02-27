@@ -112,6 +112,61 @@ def _draw_semicircle(draw: ImageDraw.ImageDraw, cx: int, cy: int,
                   start=0, end=180, fill=color)
 
 
+def _draw_hexagon(draw: ImageDraw.ImageDraw, cx: int, cy: int,
+                  pw: int, ph: int, color: tuple[int, ...]) -> None:
+    hw, hh = pw / 2.0, ph / 2.0
+    pts = [(cx + hw, cy), (cx + hw * 0.5, cy - hh),
+           (cx - hw * 0.5, cy - hh), (cx - hw, cy),
+           (cx - hw * 0.5, cy + hh), (cx + hw * 0.5, cy + hh)]
+    draw.polygon(pts, fill=color)
+
+
+def _draw_parallelogram(draw: ImageDraw.ImageDraw, cx: int, cy: int,
+                        pw: int, ph: int, color: tuple[int, ...]) -> None:
+    hw, hh = pw / 2.0, ph / 2.0
+    skew = hw * 0.35
+    pts = [(cx - hw + skew, cy - hh), (cx + hw + skew, cy - hh),
+           (cx + hw - skew, cy + hh), (cx - hw - skew, cy + hh)]
+    draw.polygon(pts, fill=color)
+
+
+def _draw_lshape(draw: ImageDraw.ImageDraw, cx: int, cy: int,
+                 pw: int, ph: int, color: tuple[int, ...]) -> None:
+    arm = max(3, min(pw, ph) // 4)
+    draw.rectangle([cx - pw // 2, cy - ph // 2,
+                    cx - pw // 2 + arm, cy + ph // 2], fill=color)
+    draw.rectangle([cx - pw // 2, cy + ph // 2 - arm,
+                    cx + pw // 2, cy + ph // 2], fill=color)
+
+
+def _draw_tshape(draw: ImageDraw.ImageDraw, cx: int, cy: int,
+                 pw: int, ph: int, color: tuple[int, ...]) -> None:
+    arm = max(3, min(pw, ph) // 4)
+    draw.rectangle([cx - pw // 2, cy - ph // 2,
+                    cx + pw // 2, cy - ph // 2 + arm], fill=color)
+    draw.rectangle([cx - arm // 2, cy - ph // 2,
+                    cx + arm // 2, cy + ph // 2], fill=color)
+
+
+def _draw_arrow(draw: ImageDraw.ImageDraw, cx: int, cy: int,
+                pw: int, ph: int, color: tuple[int, ...]) -> None:
+    hw, hh = pw / 2.0, ph / 2.0
+    shaft = max(2, int(hh * 0.35))
+    pts = [(cx, cy - hh), (cx + hw, cy), (cx + hw * 0.35, cy),
+           (cx + hw * 0.35, cy + hh), (cx - hw * 0.35, cy + hh),
+           (cx - hw * 0.35, cy), (cx - hw, cy)]
+    draw.polygon(pts, fill=color)
+
+
+def _draw_chevron(draw: ImageDraw.ImageDraw, cx: int, cy: int,
+                  pw: int, ph: int, color: tuple[int, ...]) -> None:
+    hw, hh = pw / 2.0, ph / 2.0
+    notch = hh * 0.45
+    pts = [(cx - hw, cy - hh), (cx, cy - hh + notch), (cx + hw, cy - hh),
+           (cx + hw, cy + hh), (cx, cy + hh - notch), (cx - hw, cy + hh)]
+    draw.polygon(pts, fill=color)
+
+
 _SHAPE_DRAWERS = {
     "square": _draw_square,
     "rect": _draw_rect,
@@ -122,6 +177,12 @@ _SHAPE_DRAWERS = {
     "line": _draw_line,
     "ellipse": _draw_ellipse,
     "semicircle": _draw_semicircle,
+    "hexagon": _draw_hexagon,
+    "parallelogram": _draw_parallelogram,
+    "lshape": _draw_lshape,
+    "tshape": _draw_tshape,
+    "arrow": _draw_arrow,
+    "chevron": _draw_chevron,
 }
 
 
@@ -160,7 +221,6 @@ def _inset_polygon(pts: list[tuple[float, float]], scale: float) -> list[tuple[f
 def _get_shape_corners(kind: str, pw: float, ph: float) -> list[tuple[float, float]]:
     hw, hh = pw / 2.0, ph / 2.0
     if kind == "triangle":
-        # Top-center, bottom-right, bottom-left
         return [(0, -hh), (hw, hh), (-hw, hh)]
     elif kind == "trapezoid":
         narrow = max(1.0, hw * 0.45)
@@ -171,15 +231,49 @@ def _get_shape_corners(kind: str, pw: float, ph: float) -> list[tuple[float, flo
         return [(-hw, -ht), (hw, -ht), (hw, ht), (-hw, ht)]
     elif kind == "cross":
         arm = max(1.5, min(pw, ph) / 10.0)
-        # 12 vertices clockwise
         return [
             (-arm, -hh), (arm, -hh), (arm, -arm),
             (hw, -arm), (hw, arm), (arm, arm),
             (arm, hh), (-arm, hh), (-arm, arm),
-            (-hw, arm), (-hw, -arm), (-arm, -arm)
+            (-hw, arm), (-hw, -arm), (-arm, -arm),
+        ]
+    elif kind == "hexagon":
+        return [
+            (hw, 0), (hw * 0.5, -hh), (-hw * 0.5, -hh),
+            (-hw, 0), (-hw * 0.5, hh), (hw * 0.5, hh),
+        ]
+    elif kind == "parallelogram":
+        skew = hw * 0.35
+        return [
+            (-hw + skew, -hh), (hw + skew, -hh),
+            (hw - skew, hh), (-hw - skew, hh),
+        ]
+    elif kind == "lshape":
+        arm = max(1.5, min(pw, ph) / 4.0)
+        return [
+            (-hw, -hh), (-hw + arm, -hh), (-hw + arm, hh - arm),
+            (hw, hh - arm), (hw, hh), (-hw, hh),
+        ]
+    elif kind == "tshape":
+        arm = max(1.5, min(pw, ph) / 4.0)
+        return [
+            (-hw, -hh), (hw, -hh), (hw, -hh + arm),
+            (arm / 2, -hh + arm), (arm / 2, hh),
+            (-arm / 2, hh), (-arm / 2, -hh + arm), (-hw, -hh + arm),
+        ]
+    elif kind == "arrow":
+        shaft = hw * 0.35
+        return [
+            (0, -hh), (hw, 0), (shaft, 0),
+            (shaft, hh), (-shaft, hh), (-shaft, 0), (-hw, 0),
+        ]
+    elif kind == "chevron":
+        notch = hh * 0.45
+        return [
+            (-hw, -hh), (0, -hh + notch), (hw, -hh),
+            (hw, hh), (0, hh - notch), (-hw, hh),
         ]
     else:
-        # Default to bounding box (rect, square, circle, etc.)
         return [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
 
 
@@ -235,6 +329,146 @@ def _projection_vector(shape: Shape, width: int, height: int,
     return (ux * mag, uy * mag)
 
 
+def _draw_face_details(draw: ImageDraw.ImageDraw,
+                       front: list[tuple[float, float]],
+                       shape: Shape,
+                       detail_color: tuple[int, ...],
+                       detail_light: tuple[int, ...],
+                       width: int, height: int) -> None:
+    """Draw bold architectural detail patterns on the front face of a cuboid.
+
+    Each window/cell is sized as a visible fraction of the face so
+    patterns read clearly even at thumbnail resolution.
+    """
+    if shape.detail == "none" or len(front) < 3:
+        return
+
+    cfx, cfy = _centroid(front)
+    rad = math.radians(shape.rotation)
+    cos_r, sin_r = math.cos(rad), math.sin(rad)
+
+    pw = max(8, int(shape.w * width))
+    ph = max(8, int(shape.h * height))
+
+    if pw < 16 or ph < 16:
+        return
+
+    def _lts(lx, ly):
+        return (int(lx * cos_r - ly * sin_r + cfx),
+                int(lx * sin_r + ly * cos_r + cfy))
+
+    def _rpoly(lx, ly, hw, hh):
+        return [_lts(lx - hw, ly - hh), _lts(lx + hw, ly - hh),
+                _lts(lx + hw, ly + hh), _lts(lx - hw, ly + hh)]
+
+    span_w = pw * 0.40
+    span_h = ph * 0.40
+    lw = max(1, int(min(pw, ph) * 0.015))
+
+    if shape.detail == "windows":
+        win_w = max(3, int(pw * 0.11))
+        win_h = max(3, int(ph * 0.14))
+        gap_w = max(2, int(pw * 0.045))
+        gap_h = max(2, int(ph * 0.055))
+        step_x = win_w + gap_w
+        step_y = win_h + gap_h
+        cols = max(2, min(6, int(pw * 0.78 / max(1, step_x))))
+        rows = max(1, min(5, int(ph * 0.78 / max(1, step_y))))
+        for r in range(rows):
+            for c in range(cols):
+                lx = (c - (cols - 1) / 2.0) * step_x
+                ly = (r - (rows - 1) / 2.0) * step_y
+                pts = _rpoly(lx, ly, win_w / 2, win_h / 2)
+                draw.polygon(pts, fill=detail_color)
+                draw.line([pts[0], pts[1]], fill=detail_light, width=1)
+
+    elif shape.detail == "checker":
+        cell = max(4, int(min(pw, ph) / 5))
+        cols = max(2, min(5, int(pw * 0.75 / cell)))
+        rows = max(2, min(5, int(ph * 0.75 / cell)))
+        for r in range(rows):
+            for c in range(cols):
+                if (r + c) % 2 == 0:
+                    lx = (c - (cols - 1) / 2.0) * cell
+                    ly = (r - (rows - 1) / 2.0) * cell
+                    pts = _rpoly(lx, ly, cell / 2.2, cell / 2.2)
+                    draw.polygon(pts, fill=detail_color)
+
+    elif shape.detail == "ladder":
+        n_rungs = max(3, min(8, ph // 12))
+        rung_hw = span_w * 0.85
+        rlw = max(2, int(min(pw, ph) * 0.02))
+        for i in range(n_rungs):
+            ly = (i - (n_rungs - 1) / 2.0) * span_h * 1.7 / max(1, n_rungs - 1)
+            draw.line([_lts(-rung_hw, ly), _lts(rung_hw, ly)],
+                      fill=detail_color, width=rlw)
+        rail_hh = span_h * 0.90
+        for side in [-1, 1]:
+            draw.line([_lts(side * rung_hw, -rail_hh),
+                       _lts(side * rung_hw, rail_hh)],
+                      fill=detail_color, width=rlw)
+
+    elif shape.detail == "lines_h":
+        n_lines = max(3, min(8, ph // 10))
+        line_hw = span_w * 0.92
+        for i in range(n_lines):
+            ly = (i - (n_lines - 1) / 2.0) * span_h * 1.7 / max(1, n_lines - 1)
+            draw.line([_lts(-line_hw, ly), _lts(line_hw, ly)],
+                      fill=detail_color, width=lw)
+
+    elif shape.detail == "lines_v":
+        n_lines = max(3, min(8, pw // 10))
+        line_hh = span_h * 0.92
+        for i in range(n_lines):
+            lx = (i - (n_lines - 1) / 2.0) * span_w * 1.7 / max(1, n_lines - 1)
+            draw.line([_lts(lx, -line_hh), _lts(lx, line_hh)],
+                      fill=detail_color, width=lw)
+
+    elif shape.detail == "dots":
+        cols = max(2, min(5, pw // 16))
+        rows = max(2, min(5, ph // 16))
+        dot_r = max(2, int(min(pw, ph) * 0.028))
+        for r in range(rows):
+            for c in range(cols):
+                lx = (c - (cols - 1) / 2.0) * span_w * 1.5 / max(1, cols - 1)
+                ly = (r - (rows - 1) / 2.0) * span_h * 1.5 / max(1, rows - 1)
+                sx, sy = _lts(lx, ly)
+                draw.ellipse([sx - dot_r, sy - dot_r, sx + dot_r, sy + dot_r],
+                             fill=detail_color)
+
+    elif shape.detail == "grid_frame":
+        gh = max(2, min(5, ph // 14))
+        gw = max(2, min(5, pw // 14))
+        glw = max(1, int(min(pw, ph) * 0.012))
+        frame_hw = span_w * 0.90
+        frame_hh = span_h * 0.90
+        for i in range(gh + 1):
+            ly = -frame_hh + i * (2 * frame_hh / max(1, gh))
+            draw.line([_lts(-frame_hw, ly), _lts(frame_hw, ly)],
+                      fill=detail_color, width=glw)
+        for i in range(gw + 1):
+            lx = -frame_hw + i * (2 * frame_hw / max(1, gw))
+            draw.line([_lts(lx, -frame_hh), _lts(lx, frame_hh)],
+                      fill=detail_color, width=glw)
+
+    elif shape.detail == "cross_brace":
+        brace_hw = span_w * 0.88
+        brace_hh = span_h * 0.88
+        blw = max(2, int(min(pw, ph) * 0.018))
+        draw.line([_lts(-brace_hw, -brace_hh), _lts(brace_hw, brace_hh)],
+                  fill=detail_color, width=blw)
+        draw.line([_lts(brace_hw, -brace_hh), _lts(-brace_hw, brace_hh)],
+                  fill=detail_color, width=blw)
+        draw.line([_lts(-brace_hw, -brace_hh), _lts(brace_hw, -brace_hh)],
+                  fill=detail_color, width=blw)
+        draw.line([_lts(brace_hw, -brace_hh), _lts(brace_hw, brace_hh)],
+                  fill=detail_color, width=blw)
+        draw.line([_lts(brace_hw, brace_hh), _lts(-brace_hw, brace_hh)],
+                  fill=detail_color, width=blw)
+        draw.line([_lts(-brace_hw, brace_hh), _lts(-brace_hw, -brace_hh)],
+                  fill=detail_color, width=blw)
+
+
 def _render_cuboid_layer(shape: Shape, width: int, height: int,
                           palette: list[tuple],
                           genome: ShapeGenome) -> Image.Image:
@@ -244,25 +478,28 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     and dynamically draws visible side faces using edge normals.
     """
     rgb = _palette_rgb(palette, shape.color_idx)
-    alpha = int(shape.opacity * 255)
+    is_solid = shape.opacity >= 0.97
+    alpha = 255 if is_solid else int(max(shape.opacity, 0.94) * 255)
+    material = shape.material if shape.material in ("concrete", "marble") else "concrete"
 
-    is_glass = shape.opacity < 0.68
-    if is_glass:
-        front_color = _lighten(rgb, 0.34) + (max(70, int(alpha * 0.66)),)
-        top_color = _lighten(rgb, 0.48) + (max(55, int(alpha * 0.46)),)
-        side_color = _lighten(rgb, 0.22) + (max(45, int(alpha * 0.38)),)
-        edge_color = _lighten(rgb, 0.60) + (max(80, int(alpha * 0.60)),)
-        highlight_edge = (245, 248, 255, min(255, int(alpha * 0.78) + 68))
-        shadow_edge = _darken(rgb, 0.35) + (max(50, int(alpha * 0.42)),)
-        seam_color = _lighten(rgb, 0.32) + (max(50, int(alpha * 0.48)),)
+    if material == "marble":
+        base = _lighten(rgb, 0.16)
+        front_color = base + (alpha,)
+        top_color = _lighten(base, 0.22) + (alpha,)
+        side_color = _darken(base, 0.15) + (alpha,)
+        edge_color = _darken(base, 0.40) + (min(255, alpha + 18),)
+        highlight_edge = _lighten(base, 0.62) + (min(255, alpha + 24),)
+        shadow_edge = _darken(base, 0.52) + (min(255, alpha + 18),)
+        seam_color = _darken(base, 0.32) + (max(75, int(alpha * 0.68)),)
     else:
-        front_color = rgb + (alpha,)
-        top_color = _lighten(rgb, 0.30) + (alpha,)
-        side_color = _darken(rgb, 0.25) + (alpha,)
-        edge_color = _darken(rgb, 0.50) + (min(255, alpha + 20),)
-        highlight_edge = _lighten(rgb, 0.52) + (min(255, alpha + 30),)
-        shadow_edge = _darken(rgb, 0.62) + (min(255, alpha + 30),)
-        seam_color = _darken(rgb, 0.45) + (max(80, int(alpha * 0.75)),)
+        base = _darken(_lighten(rgb, 0.05), 0.08)
+        front_color = base + (alpha,)
+        top_color = _lighten(base, 0.16) + (alpha,)
+        side_color = _darken(base, 0.26) + (alpha,)
+        edge_color = _darken(base, 0.52) + (min(255, alpha + 20),)
+        highlight_edge = _lighten(base, 0.36) + (min(255, alpha + 20),)
+        shadow_edge = _darken(base, 0.64) + (min(255, alpha + 18),)
+        seam_color = _darken(base, 0.48) + (max(84, int(alpha * 0.74)),)
 
     # Projection vectors (pixels per unit)
     scale = min(width, height)
@@ -275,8 +512,9 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     elev_dy = shape.elevation * scale * proj_dy
 
     # Front face dimensions and center (with elevation offset)
-    pw = max(1, int(shape.w * width))
-    ph = max(1, int(shape.h * height))
+    min_px = max(6, int(min(width, height) * 0.014))
+    pw = max(min_px, int(shape.w * width))
+    ph = max(min_px, int(shape.h * height))
     cx = shape.x * width + elev_dx
     cy = shape.y * height + elev_dy
 
@@ -343,7 +581,10 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
             (x + depth_dx * 1.3 - elev_dx * 0.2, y + depth_dy * 1.3 - elev_dy * 0.2)
             for x, y in front
         ]
-        shadow_alpha = int(18 + alpha * 0.09) if is_glass else int(30 + alpha * 0.12)
+        if is_solid:
+            shadow_alpha = 52 if material == "marble" else 62
+        else:
+            shadow_alpha = int(22 + alpha * 0.10) if material == "marble" else int(32 + alpha * 0.13)
         draw.polygon(_ipoly(shadow_poly), fill=(0, 0, 0, shadow_alpha))
 
         n_pts = len(front)
@@ -392,15 +633,30 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     draw.polygon(front_pts, fill=front_color)
 
     if len(front) >= 3:
-        # Subtle front-face panel modulation for a more finished architectural feel.
-        if is_glass:
-            inner = _ipoly(_inset_polygon(front, 0.90))
-            draw.polygon(inner, fill=_lighten(rgb, 0.52) + (max(20, int(alpha * 0.24)),))
-        else:
+        if is_solid:
             inner = _ipoly(_inset_polygon(front, 0.92))
             core = _ipoly(_inset_polygon(front, 0.84))
-            draw.polygon(inner, fill=_lighten(rgb, 0.10) + (int(alpha * 0.20),))
-            draw.polygon(core, fill=_darken(rgb, 0.08) + (int(alpha * 0.10),))
+            if material == "marble":
+                draw.polygon(inner, fill=_lighten(front_color[:3], 0.10) + (255,))
+                draw.polygon(core, fill=_darken(front_color[:3], 0.04) + (255,))
+            else:
+                draw.polygon(inner, fill=_lighten(front_color[:3], 0.05) + (255,))
+                draw.polygon(core, fill=_darken(front_color[:3], 0.08) + (255,))
+        else:
+            inner = _ipoly(_inset_polygon(front, 0.92))
+            core = _ipoly(_inset_polygon(front, 0.86 if material == "marble" else 0.84))
+            if material == "marble":
+                draw.polygon(inner, fill=_lighten(front_color[:3], 0.20) + (int(alpha * 0.16),))
+                draw.polygon(core, fill=_darken(front_color[:3], 0.05) + (int(alpha * 0.08),))
+            else:
+                draw.polygon(inner, fill=_lighten(front_color[:3], 0.08) + (int(alpha * 0.20),))
+                draw.polygon(core, fill=_darken(front_color[:3], 0.10) + (int(alpha * 0.12),))
+
+    # Architectural detail patterns on front face
+    if shape.detail != "none":
+        det_dark = _darken(front_color[:3], 0.55) + (min(255, alpha),)
+        det_light = _lighten(front_color[:3], 0.30) + (min(255, alpha),)
+        _draw_face_details(draw, front, shape, det_dark, det_light, width, height)
 
     if shape.depth > 0.002:
         # Directional edge tinting simulates bevel highlights/shadows.
@@ -422,17 +678,28 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
 
         # Material-specific surface finish.
         cfx, cfy = _centroid(front)
-        if is_glass:
-            axis = math.radians(shape.rotation - 28)
-            dx = math.cos(axis)
-            dy = math.sin(axis)
-            half_len = min(pw, ph) * 0.34
-            p1 = (cfx - dx * half_len, cfy - dy * half_len)
-            p2 = (cfx + dx * half_len, cfy + dy * half_len)
-            draw.line([tuple(map(int, p1)), tuple(map(int, p2))], fill=highlight_edge, width=1)
-            p1b = (p1[0] + 2.0, p1[1] + 2.0)
-            p2b = (p2[0] + 2.0, p2[1] + 2.0)
-            draw.line([tuple(map(int, p1b)), tuple(map(int, p2b))], fill=seam_color, width=1)
+        if material == "marble":
+            seed = int(
+                (shape.x * 100003 + shape.y * 70001 + shape.rotation * 313 + shape.w * 10000 + shape.h * 9000)
+                * 1000
+            ) & 0xFFFFFFFF
+            rng = _py_random.Random(seed)
+            n_veins = 2 if max(pw, ph) < 64 else 3
+            vein_color = _darken(front_color[:3], 0.34) + (max(48, int(alpha * 0.28)),)
+            highlight_vein = _lighten(front_color[:3], 0.30) + (max(24, int(alpha * 0.20)),)
+            span = min(pw, ph) * 0.42
+            for _ in range(n_veins):
+                axis = math.radians(shape.rotation + rng.uniform(-35, 35))
+                dx = math.cos(axis)
+                dy = math.sin(axis)
+                off = rng.uniform(-0.28, 0.28) * min(pw, ph)
+                nx, ny = -dy, dx
+                p1 = (cfx + nx * off - dx * span, cfy + ny * off - dy * span)
+                p2 = (cfx + nx * off + dx * span, cfy + ny * off + dy * span)
+                draw.line([tuple(map(int, p1)), tuple(map(int, p2))], fill=vein_color, width=1)
+                p1b = (p1[0] + nx * 1.2, p1[1] + ny * 1.2)
+                p2b = (p2[0] + nx * 1.2, p2[1] + ny * 1.2)
+                draw.line([tuple(map(int, p1b)), tuple(map(int, p2b))], fill=highlight_vein, width=1)
         elif max(pw, ph) >= 34 and _py_random.random() < 0.72:
             seam_count = 1 + (1 if max(pw, ph) >= 72 and _py_random.random() < 0.45 else 0)
             axis = math.radians(shape.rotation + (90 if pw > ph else 0))
@@ -564,6 +831,80 @@ def _render_background_fields(canvas: Image.Image,
             [tuple(map(int, p)) for p in [la, lb, lc, ld]],
             fill=tuple(sec_rgb.astype(np.uint8)) + (70,),
         )
+        return
+
+    if genome.bg_style == 5:
+        # Converging beams from two opposing edges.
+        draw = ImageDraw.Draw(canvas)
+        sec_rgb = _palette_rgb(palette, genome.bg_sec_idx)
+        alt_rgb = _palette_rgb(palette, (genome.bg_sec_idx + 3) % len(palette))
+        cx_bg = genome.bg_cx * w
+        cy_bg = genome.bg_cy * h
+        rad = math.radians(genome.bg_angle)
+        n_beams = 5
+        for i in range(n_beams):
+            t = (i - (n_beams - 1) / 2.0) / max(1, n_beams)
+            offset = t * max(w, h) * 0.55
+            ux = math.cos(rad)
+            uy = -math.sin(rad)
+            px_b = cx_bg + offset * uy
+            py_b = cy_bg + offset * (-ux)
+            ext = float(max(w, h)) * 2.2
+            la = (px_b + ux * ext, py_b + uy * ext)
+            lb = (px_b - ux * ext, py_b - uy * ext)
+            perp_x, perp_y = uy, -ux
+            bw = float(max(w, h)) * _py_random.uniform(0.04, 0.12)
+            lc = (lb[0] + perp_x * bw, lb[1] + perp_y * bw)
+            ld = (la[0] + perp_x * bw, la[1] + perp_y * bw)
+            col = sec_rgb if i % 2 == 0 else alt_rgb
+            alpha = int(40 + i * 20)
+            draw.polygon(
+                [tuple(map(int, p)) for p in [la, lb, lc, ld]],
+                fill=col + (alpha,),
+            )
+        return
+
+    if genome.bg_style == 6:
+        # Corner gradient: two palette colors fade from opposite corners.
+        sec_rgb = np.array(_palette_rgb(palette, genome.bg_sec_idx), dtype=np.float32)
+        alt_rgb = np.array(
+            _palette_rgb(palette, (genome.bg_sec_idx + 2) % len(palette)),
+            dtype=np.float32,
+        )
+        xs = np.linspace(0.0, 1.0, w, dtype=np.float32)
+        ys = np.linspace(0.0, 1.0, h, dtype=np.float32)
+        yy, xx = np.meshgrid(ys, xs, indexing="ij")
+        t = np.clip((xx + yy) / 2.0, 0.0, 1.0)
+        arr = np.zeros((h, w, 4), dtype=np.uint8)
+        for c in range(3):
+            arr[:, :, c] = np.clip(
+                sec_rgb[c] * (1.0 - t) + alt_rgb[c] * t, 0, 255,
+            ).astype(np.uint8)
+        arr[:, :, 3] = 200
+        canvas.paste(Image.alpha_composite(canvas, Image.fromarray(arr, "RGBA")), (0, 0))
+        return
+
+    if genome.bg_style == 7:
+        # Tri-split: three bold colour zones meeting at a point.
+        draw = ImageDraw.Draw(canvas)
+        sec_rgb = _palette_rgb(palette, genome.bg_sec_idx)
+        alt_rgb = _palette_rgb(palette, (genome.bg_sec_idx + 2) % len(palette))
+        ter_rgb = _palette_rgb(palette, (genome.bg_sec_idx + 4) % len(palette))
+        cx_bg = genome.bg_cx * w
+        cy_bg = genome.bg_cy * h
+        ext = float(max(w, h)) * 2.5
+        base_a = math.radians(genome.bg_angle)
+        for i, (col, alpha) in enumerate(
+            [(sec_rgb, 210), (alt_rgb, 180), (ter_rgb, 160)]
+        ):
+            a1 = base_a + i * (2.0 * math.pi / 3.0)
+            a2 = base_a + (i + 1) * (2.0 * math.pi / 3.0)
+            p1 = (cx_bg + math.cos(a1) * ext, cy_bg - math.sin(a1) * ext)
+            p2 = (cx_bg + math.cos(a2) * ext, cy_bg - math.sin(a2) * ext)
+            draw.polygon(
+                [tuple(map(int, p)) for p in [(cx_bg, cy_bg), p1, p2]],
+                fill=col + (alpha,),
+            )
         return
 
     # Style 0: Geometric split field.
@@ -894,6 +1235,52 @@ def _apply_color_gradient(image: Image.Image, strength: float = 12.0) -> Image.I
     return Image.fromarray(arr.astype(np.uint8), image.mode)
 
 
+def _apply_cinematic_finish(image: Image.Image, genome: ShapeGenome) -> Image.Image:
+    """Add cinematic polish for Hadid renders.
+
+    Stack:
+      1) soft highlight bloom on bright edges,
+      2) split-tone grade (cool shadows / warm highlights),
+      3) directional vignette driven by background pivot.
+    """
+    arr = np.array(image).astype(np.float32)
+    h, w = arr.shape[:2]
+
+    # 1) Bloom from bright regions.
+    lum = (0.2126 * arr[:, :, 0] + 0.7152 * arr[:, :, 1] + 0.0722 * arr[:, :, 2]).astype(np.float32)
+    threshold = 198.0
+    mask = np.clip((lum - threshold) / max(1.0, 255.0 - threshold), 0.0, 1.0)
+    bloom_src = np.zeros_like(arr)
+    for c in range(3):
+        bloom_src[:, :, c] = arr[:, :, c] * mask
+    bloom_img = Image.fromarray(np.clip(bloom_src, 0, 255).astype(np.uint8), "RGB")
+    bloom_blur = np.array(bloom_img.filter(ImageFilter.GaussianBlur(radius=2.1))).astype(np.float32)
+    arr = np.clip(arr + bloom_blur * 0.26, 0, 255)
+
+    # 2) Split tone + contrast lift.
+    lum = (0.2126 * arr[:, :, 0] + 0.7152 * arr[:, :, 1] + 0.0722 * arr[:, :, 2]).astype(np.float32) / 255.0
+    arr = (arr - 128.0) * 1.06 + 128.0
+    shadow_w = np.clip((0.56 - lum) / 0.56, 0.0, 1.0)
+    high_w = np.clip((lum - 0.44) / 0.56, 0.0, 1.0)
+    arr[:, :, 2] += shadow_w * 12.0
+    arr[:, :, 0] += high_w * 8.0
+    arr[:, :, 1] += high_w * 3.0
+
+    # 3) Directional vignette to pull focus.
+    xs = np.linspace(0.0, 1.0, w, dtype=np.float32)
+    ys = np.linspace(0.0, 1.0, h, dtype=np.float32)
+    yy, xx = np.meshgrid(ys, xs, indexing="ij")
+    cx = np.float32(genome.bg_cx)
+    cy = np.float32(genome.bg_cy)
+    dist = np.sqrt((xx - cx) * (xx - cx) + (yy - cy) * (yy - cy))
+    vignette = np.clip((dist - 0.20) / 0.78, 0.0, 1.0)
+    vig_amount = vignette * (0.10 + 0.06 * abs(genome.perspective_bias))
+    for c in range(3):
+        arr[:, :, c] *= (1.0 - vig_amount)
+
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), image.mode)
+
+
 # Render settings (module-level defaults, updated by server)
 GRAIN_STRENGTH: float = 8.0
 GRADIENT_STRENGTH: float = 10.0
@@ -960,9 +1347,80 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
     result = _apply_canvas_texture(result, strength=6.0)
     result = _apply_grain(result, strength=GRAIN_STRENGTH)
     result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
+    result = _apply_cinematic_finish(result, genome)
 
     if _SUPERSAMPLE > 1:
         result = result.resize((width, height), Image.LANCZOS)
+
+    return result
+
+
+def render_genome_extended(genome: ShapeGenome, square_size: int,
+                           orientation: str = "square",
+                           palette: list[tuple] | None = None) -> Image.Image:
+    """Render with extended canvas for landscape or portrait output.
+
+    Background is rendered at the full extended dimensions so patterns
+    extend seamlessly.  Shapes are rendered at square dimensions and
+    composited into the centre.  Post-processing is applied once to the
+    unified canvas.
+    """
+    if palette is None:
+        palette = DEFAULT_PALETTE
+
+    if orientation == "square":
+        return render_genome(genome, square_size, square_size, palette)
+
+    if orientation == "landscape":
+        out_w = int(square_size * 1.5)
+        out_h = square_size
+    else:
+        out_w = square_size
+        out_h = int(square_size * 1.5)
+
+    iw = out_w * _SUPERSAMPLE
+    ih = out_h * _SUPERSAMPLE
+    sq_iw = square_size * _SUPERSAMPLE
+    sq_ih = square_size * _SUPERSAMPLE
+    off_x = (iw - sq_iw) // 2
+    off_y = (ih - sq_ih) // 2
+
+    is_3d = genome.projection_strength > 0.01
+
+    bg_rgb = _palette_rgb(palette, genome.bg_color_idx)
+    canvas = Image.new("RGBA", (iw, ih), bg_rgb + (255,))
+
+    if is_3d:
+        _render_background_fields(canvas, genome, palette)
+
+    shapes_layer = Image.new("RGBA", (sq_iw, sq_ih), (0, 0, 0, 0))
+    all_shapes = genome.flatten()
+    if is_3d:
+        all_shapes.sort(key=lambda s: s.elevation)
+        for shape in all_shapes:
+            layer = _render_cuboid_layer(shape, sq_iw, sq_ih, palette, genome)
+            shapes_layer = Image.alpha_composite(shapes_layer, layer)
+    else:
+        for shape in all_shapes:
+            layer = _render_shape_layer(shape, sq_iw, sq_ih, palette)
+            shapes_layer = Image.alpha_composite(shapes_layer, layer)
+
+    canvas.paste(shapes_layer, (off_x, off_y), shapes_layer)
+
+    result = canvas.convert("RGB")
+    if is_3d:
+        result = _apply_atmospheric_blend(result, genome, palette)
+        result = _apply_canvas_texture(result, strength=6.0)
+        result = _apply_grain(result, strength=GRAIN_STRENGTH)
+        result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
+        result = _apply_cinematic_finish(result, genome)
+    else:
+        result = _apply_canvas_texture(result, strength=14.0)
+        result = _apply_grain(result, strength=GRAIN_STRENGTH)
+        result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
+
+    if _SUPERSAMPLE > 1:
+        result = result.resize((out_w, out_h), Image.LANCZOS)
 
     return result
 

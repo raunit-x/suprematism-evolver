@@ -87,12 +87,32 @@ HADID_PALETTE = {
     "pale_blue":     hex_to_rgb("#AFC0DC"),
 }
 
+# --- Maps Palette ---
+# Bold palette for abstract city-plan compositions.
+# Inspired by Zaha Hadid's masterplan paintings — high-contrast primaries
+# (signal red, cobalt blue, orange, white) against dark charcoal grounds.
+MAPS_PALETTE = {
+    "off_white":     hex_to_rgb("#F0EDE4"),    # 0  bg light
+    "charcoal":      hex_to_rgb("#1C1C1E"),    # 1  bg dark / roads
+    "silver":        hex_to_rgb("#C0C2C8"),    # 2  road lines
+    "signal_red":    hex_to_rgb("#CF2E2E"),    # 3  accent / building
+    "cobalt_blue":   hex_to_rgb("#2059BA"),    # 4  accent / building
+    "orange":        hex_to_rgb("#E06828"),    # 5  building
+    "white":         hex_to_rgb("#FAFAFA"),    # 6  building / highlight
+    "ochre_yellow":  hex_to_rgb("#D5B143"),    # 7  monument
+    "deep_red":      hex_to_rgb("#8B1A1A"),    # 8  road accent
+    "cool_grey":     hex_to_rgb("#6B6E76"),    # 9  building
+    "pale_blue":     hex_to_rgb("#AFC0DC"),    # 10 building
+    "graphite":      hex_to_rgb("#3A3A42"),    # 11 bg dark alt
+}
+
 PALETTES = {
     "malevich": MALEVICH_PALETTE,
     "suprematist": SUPREMATIST_PALETTE,
     "basquiat": BASQUIAT_PALETTE,
     "hybrid": HYBRID_PALETTE,
     "hadid": HADID_PALETTE,
+    "maps": MAPS_PALETTE,
     "none": None,
 }
 

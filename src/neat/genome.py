@@ -35,6 +35,11 @@ class Genome:
     output_keys: tuple[int, ...] = ()
     _next_node_key: int = 0
 
+    # Compositional parameters (per-genome, evolvable)
+    comp_focal_x: float = 0.0
+    comp_focal_y: float = 0.0
+    comp_armature_angle: float = 0.0
+
     def copy(self) -> Genome:
         """Deep copy this genome with a new key."""
         g = Genome(key=self.key)
@@ -44,6 +49,9 @@ class Genome:
         g.output_keys = self.output_keys
         g._next_node_key = self._next_node_key
         g.fitness = None
+        g.comp_focal_x = self.comp_focal_x
+        g.comp_focal_y = self.comp_focal_y
+        g.comp_armature_angle = self.comp_armature_angle
         return g
 
     def allocate_node_key(self) -> int:
@@ -85,12 +93,15 @@ class Genome:
         g.output_keys = tuple(output_keys)
         g._next_node_key = num_inputs + num_outputs
 
-        # Connect every input to every output with small random weights
         for i_key in input_keys:
             for o_key in output_keys:
                 conn_key = (i_key, o_key)
                 w = random.uniform(-weight_range, weight_range)
                 g.connections[conn_key] = ConnectionGene(key=conn_key, weight=w)
+
+        g.comp_focal_x = random.uniform(-0.6, 0.6)
+        g.comp_focal_y = random.uniform(-0.6, 0.6)
+        g.comp_armature_angle = random.uniform(-3.14159, 3.14159)
 
         return g
 
@@ -226,6 +237,14 @@ class Genome:
         if random.random() < config.get("toggle_enable_rate", 0.01):
             self.mutate_toggle_enable()
 
+        if random.random() < 0.08:
+            self.comp_focal_x = max(-0.8, min(0.8,
+                self.comp_focal_x + random.gauss(0, 0.15)))
+            self.comp_focal_y = max(-0.8, min(0.8,
+                self.comp_focal_y + random.gauss(0, 0.15)))
+        if random.random() < 0.05:
+            self.comp_armature_angle += random.gauss(0, 0.2)
+
 
 def crossover(parent1: Genome, parent2: Genome, child_key: int) -> Genome:
     """NEAT crossover: align by connection key, prefer fitter parent.
@@ -258,9 +277,13 @@ def crossover(parent1: Genome, parent2: Genome, child_key: int) -> Genome:
         elif in_p1:
             # Disjoint/excess from fitter parent
             child.connections[conn_key] = copy.copy(parent1.connections[conn_key])
-        # else: from less-fit parent -- only inherit if equal fitness
         elif parent1.fitness == parent2.fitness:
             child.connections[conn_key] = copy.copy(parent2.connections[conn_key])
+
+    p = parent1 if random.random() < 0.5 else parent2
+    child.comp_focal_x = p.comp_focal_x
+    child.comp_focal_y = p.comp_focal_y
+    child.comp_armature_angle = p.comp_armature_angle
 
     return child
 
