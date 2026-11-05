@@ -487,8 +487,11 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     and dynamically draws visible side faces using edge normals.
     """
     rgb = _palette_rgb(palette, shape.color_idx)
-    is_solid = shape.opacity >= 0.97
-    alpha = 255 if is_solid else int(max(shape.opacity, 0.94) * 255)
+    # ImageDraw writes RGBA pixels verbatim (no blending), so any alpha < 255
+    # fill punches a hole through the face and reads as a hollow wire frame.
+    # Architectons are painted solids: always fully opaque.
+    is_solid = True
+    alpha = 255
     material = shape.material if shape.material in ("concrete", "marble") else "concrete"
 
     if material == "marble":
@@ -503,8 +506,8 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     else:
         base = _darken(_lighten(rgb, 0.05), 0.08)
         front_color = base + (alpha,)
-        top_color = _lighten(base, 0.16) + (alpha,)
-        side_color = _darken(base, 0.26) + (alpha,)
+        top_color = _lighten(base, 0.30) + (alpha,)
+        side_color = _darken(base, 0.36) + (alpha,)
         edge_color = _darken(base, 0.52) + (min(255, alpha + 20),)
         highlight_edge = _lighten(base, 0.36) + (min(255, alpha + 20),)
         shadow_edge = _darken(base, 0.64) + (min(255, alpha + 18),)
@@ -635,31 +638,11 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
             # Architectural edge lines
             for i in range(len(pts)):
                 draw.line([pts[i], pts[(i + 1) % len(pts)]],
-                          fill=edge_color, width=1)
+                          fill=edge_color, width=2)
 
     # Front face (always visible, drawn last)
     front_pts = _ipoly(front)
     draw.polygon(front_pts, fill=front_color)
-
-    if len(front) >= 3:
-        if is_solid:
-            inner = _ipoly(_inset_polygon(front, 0.92))
-            core = _ipoly(_inset_polygon(front, 0.84))
-            if material == "marble":
-                draw.polygon(inner, fill=_lighten(front_color[:3], 0.10) + (255,))
-                draw.polygon(core, fill=_darken(front_color[:3], 0.04) + (255,))
-            else:
-                draw.polygon(inner, fill=_lighten(front_color[:3], 0.05) + (255,))
-                draw.polygon(core, fill=_darken(front_color[:3], 0.08) + (255,))
-        else:
-            inner = _ipoly(_inset_polygon(front, 0.92))
-            core = _ipoly(_inset_polygon(front, 0.86 if material == "marble" else 0.84))
-            if material == "marble":
-                draw.polygon(inner, fill=_lighten(front_color[:3], 0.20) + (int(alpha * 0.16),))
-                draw.polygon(core, fill=_darken(front_color[:3], 0.05) + (int(alpha * 0.08),))
-            else:
-                draw.polygon(inner, fill=_lighten(front_color[:3], 0.08) + (int(alpha * 0.20),))
-                draw.polygon(core, fill=_darken(front_color[:3], 0.10) + (int(alpha * 0.12),))
 
     # Architectural detail patterns on front face
     if shape.detail != "none":
@@ -682,46 +665,8 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
             draw.line(
                 [tuple(map(int, p1)), tuple(map(int, p2))],
                 fill=ec,
-                width=1,
+                width=2,
             )
-
-        # Material-specific surface finish.
-        cfx, cfy = _centroid(front)
-        if material == "marble":
-            seed = int(
-                (shape.x * 100003 + shape.y * 70001 + shape.rotation * 313 + shape.w * 10000 + shape.h * 9000)
-                * 1000
-            ) & 0xFFFFFFFF
-            rng = _py_random.Random(seed)
-            n_veins = 2 if max(pw, ph) < 64 else 3
-            vein_color = _darken(front_color[:3], 0.34) + (max(48, int(alpha * 0.28)),)
-            highlight_vein = _lighten(front_color[:3], 0.30) + (max(24, int(alpha * 0.20)),)
-            span = min(pw, ph) * 0.42
-            for _ in range(n_veins):
-                axis = math.radians(shape.rotation + rng.uniform(-35, 35))
-                dx = math.cos(axis)
-                dy = math.sin(axis)
-                off = rng.uniform(-0.28, 0.28) * min(pw, ph)
-                nx, ny = -dy, dx
-                p1 = (cfx + nx * off - dx * span, cfy + ny * off - dy * span)
-                p2 = (cfx + nx * off + dx * span, cfy + ny * off + dy * span)
-                draw.line([tuple(map(int, p1)), tuple(map(int, p2))], fill=vein_color, width=1)
-                p1b = (p1[0] + nx * 1.2, p1[1] + ny * 1.2)
-                p2b = (p2[0] + nx * 1.2, p2[1] + ny * 1.2)
-                draw.line([tuple(map(int, p1b)), tuple(map(int, p2b))], fill=highlight_vein, width=1)
-        elif max(pw, ph) >= 34 and _py_random.random() < 0.72:
-            seam_count = 1 + (1 if max(pw, ph) >= 72 and _py_random.random() < 0.45 else 0)
-            axis = math.radians(shape.rotation + (90 if pw > ph else 0))
-            dx = math.cos(axis)
-            dy = math.sin(axis)
-            nx = -dy
-            ny = dx
-            half_len = min(pw, ph) * 0.28
-            for s_idx in range(seam_count):
-                off = (s_idx - (seam_count - 1) / 2.0) * min(pw, ph) * 0.18
-                p1 = (cfx + nx * off - dx * half_len, cfy + ny * off - dy * half_len)
-                p2 = (cfx + nx * off + dx * half_len, cfy + ny * off + dy * half_len)
-                draw.line([tuple(map(int, p1)), tuple(map(int, p2))], fill=seam_color, width=1)
 
     return layer
 
@@ -1322,7 +1267,7 @@ def _apply_cinematic_finish(image: Image.Image, genome: ShapeGenome) -> Image.Im
         bloom_src[:, :, c] = arr[:, :, c] * mask
     bloom_img = Image.fromarray(np.clip(bloom_src, 0, 255).astype(np.uint8), "RGB")
     bloom_blur = np.array(bloom_img.filter(ImageFilter.GaussianBlur(radius=2.1))).astype(np.float32)
-    arr = np.clip(arr + bloom_blur * 0.26, 0, 255)
+    arr = np.clip(arr + bloom_blur * 0.08, 0, 255)
 
     # 2) Split tone + contrast lift.
     lum = (0.2126 * arr[:, :, 0] + 0.7152 * arr[:, :, 1] + 0.0722 * arr[:, :, 2]).astype(np.float32) / 255.0
@@ -1341,7 +1286,7 @@ def _apply_cinematic_finish(image: Image.Image, genome: ShapeGenome) -> Image.Im
     cy = np.float32(genome.bg_cy)
     dist = np.sqrt((xx - cx) * (xx - cx) + (yy - cy) * (yy - cy))
     vignette = np.clip((dist - 0.20) / 0.78, 0.0, 1.0)
-    vig_amount = vignette * (0.10 + 0.06 * abs(genome.perspective_bias))
+    vig_amount = vignette * (0.05 + 0.04 * abs(genome.perspective_bias))
     for c in range(3):
         arr[:, :, c] *= (1.0 - vig_amount)
 
@@ -1445,6 +1390,23 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
     return result
 
 
+def _cast_ground_shadow(stack: Image.Image) -> Image.Image:
+    """Soft drop shadow of the whole structure, lit from the upper left.
+
+    Grounds the architecton so it stops floating on the background field.
+    """
+    w, h = stack.size
+    alpha = stack.getchannel("A")
+    off = (int(w * 0.028), int(h * 0.042))
+    shifted = Image.new("L", (w, h), 0)
+    shifted.paste(alpha, off)
+    shifted = shifted.filter(ImageFilter.GaussianBlur(radius=max(2.0, w * 0.012)))
+    shifted = shifted.point(lambda v: int(v * 0.32))
+    shadow = Image.new("RGBA", (w, h), (8, 8, 16, 0))
+    shadow.putalpha(shifted)
+    return shadow
+
+
 def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
                        palette: list[tuple], grain: float,
                        gradient: float) -> Image.Image:
@@ -1467,15 +1429,19 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
     all_shapes = genome.flatten()
     all_shapes.sort(key=lambda s: s.elevation)
 
+    stack = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
     for shape in all_shapes:
-        _composite_layer(canvas, _render_cuboid_layer(
+        _composite_layer(stack, _render_cuboid_layer(
             shape, iw, ih, palette, genome,
         ))
+    canvas.alpha_composite(_cast_ground_shadow(stack))
+    canvas.alpha_composite(stack)
 
     result = canvas.convert("RGB")
     result = _apply_atmospheric_blend(result, genome, palette)
-    # Subtle canvas texture (lighter than flat mode for cleaner architectural look)
-    result = _apply_finish(result, 6.0, grain, gradient)
+    # Hadid planes are crisp and flat: very light texture/grain/gradient keeps
+    # colour pure instead of muddy.
+    result = _apply_finish(result, 2.5, grain * 0.35, gradient * 0.4)
     result = _apply_cinematic_finish(result, genome)
 
     if ss > 1:
@@ -1537,6 +1503,7 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
         for shape in all_shapes:
             _composite_layer(shapes_layer, _render_cuboid_layer(
                 shape, sq_iw, sq_ih, palette, genome))
+        canvas.alpha_composite(_cast_ground_shadow(shapes_layer), (off_x, off_y))
     else:
         for shape in all_shapes:
             _composite_shape(shapes_layer, shape, palette)
@@ -1546,7 +1513,7 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
     result = canvas.convert("RGB")
     if is_3d:
         result = _apply_atmospheric_blend(result, genome, palette)
-        result = _apply_finish(result, 6.0, grain, gradient)
+        result = _apply_finish(result, 2.5, grain * 0.35, gradient * 0.4)
         result = _apply_cinematic_finish(result, genome)
     else:
         result = _apply_finish(result, 14.0, grain, gradient)

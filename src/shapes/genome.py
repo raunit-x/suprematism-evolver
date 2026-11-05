@@ -1531,14 +1531,14 @@ def create_architecton(num_palette_colors: int = 10) -> ShapeGenome:
         weights=[35, 20, 25, 20],
     )[0]
 
-    camera_mode = random.choices([0, 1, 2], weights=[45, 30, 25])[0]
+    camera_mode = random.choices([0, 1, 2], weights=[72, 20, 8])[0]
     proj_angle = random.choice([20, 25, 30, 35, 40, 45, 55])
     proj_strength = random.uniform(0.25, 0.65)
-    proj2_angle = proj_angle + random.choice([-90, -75, -60, 60, 75, 90])
+    proj2_angle = proj_angle + random.choice([-24, -16, 16, 24])
     proj2_strength = random.uniform(0.12, 0.50)
     vanish_x = random.uniform(0.30, 0.70)
     vanish_y = random.uniform(0.25, 0.75)
-    perspective_bias = random.uniform(-0.45, 0.45)
+    perspective_bias = random.uniform(-0.25, 0.25)
 
     def _choose_material(kind: str, w: float, h: float, depth: float,
                          elevation: float, material: str | None = None) -> str:
@@ -2003,9 +2003,192 @@ def create_architecton(num_palette_colors: int = 10) -> ShapeGenome:
     )
     _apply_gravitational_alignment(genome)
     _apply_focal_weighting(genome)
+    _compose_architecton(genome, num_palette_colors)
     _solidify_architecton(genome)
     _enforce_3d_bounds(genome)
     return genome
+
+
+# ======================================================================
+# Architecton composition pass (hierarchy, palette discipline, framing)
+# ======================================================================
+
+_QUIET_DETAILS = ("windows", "lines_h", "lines_v")
+
+
+def _shape_extent(s: Shape, genome: ShapeGenome) -> tuple[float, float, float, float]:
+    """Approximate projected bbox (x0, y0, x1, y1) of a shape incl. extrusion."""
+    rad = math.radians(s.rotation)
+    ca, sa = abs(math.cos(rad)), abs(math.sin(rad))
+    bw = s.w * ca + s.h * sa
+    bh = s.w * sa + s.h * ca
+    px, py = _max_projection_components(genome)
+    ext = (s.depth + s.elevation)
+    ex, ey = ext * px, ext * py
+    return (s.x - bw / 2 - ex * 0.5, s.y - bh / 2 - ey * 0.5,
+            s.x + bw / 2 + ex * 0.5, s.y + bh / 2 + ey * 0.5)
+
+
+def _compose_architecton(genome: ShapeGenome, num_colors: int) -> None:
+    """Give a freshly generated architecton a clear visual hierarchy.
+
+    Suprematist / Hadid compositions read as a few dominant planes, a handful
+    of long structural bars, sparse accents, ONE dominant direction, a
+    restricted palette, and a composition that fills the frame.  The raw
+    generator produces many similar-weight fragments; this pass cuts it back.
+    """
+    n = max(1, num_colors)
+
+    # -- 1) Hierarchy: cull the smallest fragments, keep ~14 pieces ---------
+    MAX_PIECES = random.randint(16, 24)
+    allshapes = genome.flatten()
+    if len(allshapes) > MAX_PIECES:
+        ranked = sorted(allshapes, key=lambda s: s.w * s.h * (1.0 + 4 * s.depth),
+                        reverse=True)
+        keep = set(id(s) for s in ranked[:MAX_PIECES])
+        for g in genome.groups:
+            g.members = [m for m in g.members if id(m) in keep]
+        genome.satellites = [s for s in genome.satellites if id(s) in keep]
+    genome.groups = [g for g in genome.groups if g.anchor is not None]
+
+    shapes = genome.flatten()
+    shapes_by_area = sorted(shapes, key=lambda s: s.w * s.h, reverse=True)
+    n_hero = min(len(shapes_by_area), random.randint(3, 4))
+    heroes = shapes_by_area[:n_hero]
+    hero_ids = set(id(s) for s in heroes)
+
+    # -- 2) Scale contrast: heroes get bigger, small things stay small ------
+    for s in heroes:
+        f = random.uniform(1.15, 1.5)
+        s.w = _clamp(s.w * f, MIN_SIZE, MAX_SIZE)
+        s.h = _clamp(s.h * f, MIN_SIZE, MAX_SIZE)
+    for s in shapes_by_area[n_hero:]:
+        if s.w * s.h > 0.012:
+            f = random.uniform(0.70, 0.9)
+            s.w = _clamp(s.w * f, MIN_SIZE, MAX_SIZE)
+            s.h = _clamp(s.h * f, MIN_SIZE, MAX_SIZE)
+
+    # -- 3) One dominant direction + one counter direction ------------------
+    axis = genome.armature_angle
+    counter = axis + random.choice([-90.0, 90.0, 28.0, -28.0])
+    for s in shapes:
+        pick = counter if (id(s) not in hero_ids and random.random() < 0.30) else axis
+        if random.random() < 0.5:
+            pick += 180.0
+        s.rotation = (pick + random.gauss(0, 1.5)) % 360
+
+    # -- 4) Restricted palette ----------------------------------------------
+    # Indices follow HADID_PALETTE: 0 white, 1 warm white, 2 light grey,
+    # 3 mid grey, 4 graphite, 5 black, 6 deep blue, 7 cobalt, 8 red, 9 ochre.
+    def _ok(i):
+        return i < n
+    chroma = [i for i in (6, 7, 8, 9) if _ok(i)] or [0]
+    neutral_light = [i for i in (0, 1, 2) if _ok(i)] or [0]
+    neutral_dark = [i for i in (4, 5) if _ok(i)] or [0]
+    hero_c = random.choice(chroma)
+    second_c = random.choice([c for c in chroma if c != hero_c] or chroma)
+    accent_c = 8 if _ok(8) and hero_c != 8 else second_c
+
+    scheme = random.choice(["light", "dark", "chroma"])
+    if scheme == "light":
+        bg = random.choice(neutral_light[:2])
+    elif scheme == "dark":
+        bg = random.choice(neutral_dark)
+    else:
+        bg = hero_c
+    genome.bg_color_idx = bg
+
+    hero_palette = [hero_c, random.choice(neutral_light), random.choice(neutral_dark),
+                    second_c]
+    mid_palette = [random.choice(neutral_light), random.choice(neutral_dark),
+                   second_c, hero_c, 2 if _ok(2) else 0]
+    for i, s in enumerate(heroes):
+        s.color_idx = hero_palette[i % len(hero_palette)]
+    rest = [s for s in shapes if id(s) not in hero_ids]
+    rest.sort(key=lambda s: s.w * s.h, reverse=True)
+    n_accent = max(1, len(rest) // 6)
+    for i, s in enumerate(rest):
+        if i >= len(rest) - n_accent:
+            s.color_idx = accent_c          # tiny, sparse punctuation
+        else:
+            s.color_idx = random.choice(mid_palette)
+    # Nothing should vanish into the background.
+    for s in shapes:
+        if s.color_idx == bg:
+            s.color_idx = neutral_dark[0] if bg in neutral_light else neutral_light[0]
+    sec = random.choice([c for c in chroma + neutral_dark if c != bg] or [0])
+    genome.bg_sec_idx = sec
+    genome.bg_blend = 0.0
+
+    # -- 5) Detail restraint: only a few large faces carry pattern ----------
+    detailed = 0
+    for s in shapes_by_area:
+        if detailed < 3 and s.w * s.h > 0.015 and s.detail != "none":
+            if s.detail not in _QUIET_DETAILS:
+                s.detail = random.choice(_QUIET_DETAILS)
+            detailed += 1
+        else:
+            s.detail = "none"
+
+    # -- 6) Frame the composition: fill ~84% of the canvas ------------------
+    exts = [_shape_extent(s, genome) for s in shapes]
+    x0 = min(e[0] for e in exts); y0 = min(e[1] for e in exts)
+    x1 = max(e[2] for e in exts); y1 = max(e[3] for e in exts)
+    span = max(x1 - x0, y1 - y0, 1e-6)
+    target = random.uniform(0.80, 0.90)
+    f = _clamp(target / span, 0.7, 1.9)
+    ccx, ccy = (x0 + x1) / 2, (y0 + y1) / 2
+    tx = 0.5 + random.uniform(-0.03, 0.03)
+    ty = 0.5 + random.uniform(-0.03, 0.03)
+    for s in shapes:
+        s.x = tx + (s.x - ccx) * f
+        s.y = ty + (s.y - ccy) * f
+        s.w = _clamp(s.w * f, MIN_SIZE, MAX_SIZE)
+        s.h = _clamp(s.h * f, MIN_SIZE, MAX_SIZE)
+        s.depth *= f
+        s.elevation *= f
+    for g in genome.groups:
+        g.cx = tx + (g.cx - ccx) * f
+        g.cy = ty + (g.cy - ccy) * f
+
+
+def architecton_harmony(genome: ShapeGenome) -> float:
+    """Score 0..1 for how Suprematist/Hadid-harmonious an architecton is.
+
+    Pure genome-space (no rendering).  Rewards: a few dominant masses,
+    one shared axis, a composition that fills the frame, a restrained
+    palette and restrained surface detail.  Used only to choose between
+    sibling offspring; it never overrides the user's selections.
+    """
+    shapes = genome.flatten()
+    if len(shapes) < 3:
+        return 0.0
+
+    areas = sorted((s.w * s.h for s in shapes), reverse=True)
+    top_share = sum(areas[:3]) / max(sum(areas), 1e-9)
+    hierarchy = 1.0 - min(1.0, abs(top_share - 0.65) / 0.35)
+
+    axis = genome.armature_angle
+    def _aligned(s: Shape) -> bool:
+        d = (s.rotation - axis) % 90.0
+        return min(d, 90.0 - d) < 6.0
+    axis_score = sum(1 for s in shapes if _aligned(s)) / len(shapes)
+
+    exts = [_shape_extent(s, genome) for s in shapes]
+    span = max(max(e[2] for e in exts) - min(e[0] for e in exts),
+               max(e[3] for e in exts) - min(e[1] for e in exts))
+    fill = 1.0 - min(1.0, abs(span - 0.85) / 0.45)
+
+    n_colors = len({s.color_idx for s in shapes} | {genome.bg_color_idx})
+    palette = 1.0 if n_colors <= 6 else max(0.0, 1.0 - (n_colors - 6) * 0.25)
+
+    n_detail = sum(1 for s in shapes if s.detail != "none")
+    detail = 1.0 if n_detail <= 3 else max(0.0, 1.0 - (n_detail - 3) * 0.15)
+
+    count = 1.0 if len(shapes) <= 26 else max(0.0, 1.0 - (len(shapes) - 26) * 0.08)
+
+    return (0.28 * hierarchy + 0.22 * axis_score + 0.18 * fill
+            + 0.14 * palette + 0.10 * detail + 0.08 * count)
 
 
 # ======================================================================
