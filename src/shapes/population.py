@@ -13,12 +13,17 @@ from pathlib import Path
 
 from src.shapes.genome import (
     ShapeGenome,
+    architecton_harmony,
     create_random,
     create_architecton,
     create_map,
     crossover,
     mutate,
 )
+
+
+# Siblings bred per offspring slot for Hadid; the most harmonious is kept.
+HARMONY_CANDIDATES = 4
 
 
 class ShapePopulation:
@@ -125,18 +130,28 @@ class ShapePopulation:
         for p in parents[:self.elitism]:
             next_gen.append(p.copy())
 
+        # Hadid architectons: breed a few siblings per slot and keep the most
+        # harmonious.  Parents are still exactly the user's picks.
+        n_tries = HARMONY_CANDIDATES if parents[0].engine_tag == "hadid" else 1
         while len(next_gen) < self.pop_size:
-            if len(parents) >= 2 and random.random() < self.crossover_rate:
-                p1, p2 = random.sample(parents, 2)
-                child = crossover(p1, p2)
+            candidates = [self._breed_child(parents) for _ in range(n_tries)]
+            if n_tries > 1:
+                child = max(candidates, key=architecton_harmony)
             else:
-                child = random.choice(parents).copy()
-
-            mutate(child, self.num_palette_colors, strength=self.mutation_strength)
+                child = candidates[0]
             next_gen.append(child)
 
         self.genomes = next_gen[: self.pop_size]
         self.generation += 1
+
+    def _breed_child(self, parents: list[ShapeGenome]) -> ShapeGenome:
+        if len(parents) >= 2 and random.random() < self.crossover_rate:
+            p1, p2 = random.sample(parents, 2)
+            child = crossover(p1, p2)
+        else:
+            child = random.choice(parents).copy()
+        mutate(child, self.num_palette_colors, strength=self.mutation_strength)
+        return child
 
     # ------------------------------------------------------------------
     # Serialization
