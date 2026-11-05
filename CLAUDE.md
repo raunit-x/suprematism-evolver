@@ -69,7 +69,8 @@ FastAPI app with `AppState` singleton managing both engines. Key design:
 - Shapes engine uses `_ensure_inside()` to clamp rotated bounding boxes within canvas
 - Genome serialization is JSON-based with `to_dict()`/`from_dict()` pattern throughout
 - Shapes renderer applies post-processing pipeline: canvas fiber texture → grain → warm-to-cool color gradient
-- Module-level `GRAIN_STRENGTH` and `GRADIENT_STRENGTH` in `src/shapes/renderer.py` are mutated by the server for real-time settings
+- `render_genome()` takes explicit `grain`/`gradient` args (module-level `GRAIN_STRENGTH`/`GRADIENT_STRENGTH` are only defaults); the server passes its settings to the worker processes in `src/render_pool.py`
+- Thumbnails are rendered lazily on a process pool and streamed as NDJSON from `/api/thumbs/stream`; history snapshots hold `None` for thumbnails not yet rendered
 
 ### Output
 

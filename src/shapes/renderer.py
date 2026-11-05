@@ -22,6 +22,15 @@ DEFAULT_PALETTE = list(SUPREMATIST_PALETTE.values())
 
 _SUPERSAMPLE = 2
 
+# Supersampling quadruples memory and time.  Up to this many output pixels
+# (2048x3072, i.e. a 2048 landscape export) we render at 2x; beyond it the
+# render is already so large that edge aliasing is invisible, so we render 1x.
+_SUPERSAMPLE_PIXEL_BUDGET = 2048 * 3072
+
+
+def _supersample_for(width: int, height: int) -> int:
+    return _SUPERSAMPLE if width * height <= _SUPERSAMPLE_PIXEL_BUDGET else 1
+
 # Cached fiber tile (generated once, reused)
 _FIBER_TILE: Image.Image | None = None
 _FIBER_TILE_SIZE = 512
@@ -1014,22 +1023,34 @@ def _get_fiber_tile() -> Image.Image:
     return _FIBER_TILE
 
 
+_FIBER_CACHE: dict[tuple[int, int], np.ndarray] = {}
+
+
 def _tile_fiber(width: int, height: int) -> np.ndarray:
     """Tile the fiber texture to cover (width, height).
 
-    Returns a float32 array in [-1, 1] range representing
-    the deviation from neutral.
+    Returns a float32 array in [-1, 1] range representing the deviation
+    from neutral.  The result is cached (the tile is fixed-seed, so the
+    output is deterministic) -- callers must not mutate it in place.
     """
-    tile = _get_fiber_tile()
-    tile_arr = np.array(tile).astype(np.float32)
-    ts = _FIBER_TILE_SIZE
-
-    rows_needed = (height + ts - 1) // ts
-    cols_needed = (width + ts - 1) // ts
-    tiled = np.tile(tile_arr, (rows_needed, cols_needed))
-    tiled = tiled[:height, :width]
-
-    return (tiled - 128.0) / 128.0
+    # Small requests (per-shape scratch layers) are served as views of one
+    # shared 1024x1024 tiling instead of re-tiling for every shape.
+    if width <= 1024 and height <= 1024:
+        key = (1024, 1024)
+    else:
+        key = (width, height)
+    arr = _FIBER_CACHE.get(key)
+    if arr is None:
+        tile_arr = np.array(_get_fiber_tile()).astype(np.float32)
+        ts = _FIBER_TILE_SIZE
+        rows = (key[1] + ts - 1) // ts
+        cols = (key[0] + ts - 1) // ts
+        tiled = np.tile(tile_arr, (rows, cols))[:key[1], :key[0]]
+        arr = (tiled - 128.0) / 128.0
+        if len(_FIBER_CACHE) > 4:
+            _FIBER_CACHE.clear()
+        _FIBER_CACHE[key] = arr
+    return arr[:height, :width]
 
 
 def _apply_canvas_texture(canvas: Image.Image, strength: float = 18.0) -> Image.Image:
@@ -1072,7 +1093,7 @@ def _apply_shape_texture(layer: Image.Image, strength: float = 12.0) -> Image.Im
     # Low-frequency tonal variation (smooth matte paint)
     rng = np.random.default_rng()
     lo_h, lo_w = max(2, h // 32), max(2, w // 32)
-    lo = rng.normal(0, 1, (lo_h, lo_w)).astype(np.float32)
+    lo = rng.standard_normal((lo_h, lo_w), dtype=np.float32)
     lo_up = np.array(
         Image.fromarray(((lo + 3) / 6 * 255).clip(0, 255).astype(np.uint8), "L")
         .resize((w, h), Image.BILINEAR)
@@ -1120,13 +1141,13 @@ def _apply_edge_roughness(layer: Image.Image) -> Image.Image:
     edge = np.array(edge_img).astype(np.float32) / 255.0
 
     # 1) Alpha irregularity — random erosion at edges
-    noise = rng.uniform(0, 1, (h, w)).astype(np.float32)
+    noise = rng.random((h, w), dtype=np.float32)
     alpha_jitter = edge * noise * 55
     new_alpha = np.clip(alpha - alpha_jitter, 0, 255)
 
     # 2) Tiny overspill speckles just outside the boundary
     outside = (alpha < 5) & (edge_raw > 0.1)
-    speckle_chance = rng.uniform(0, 1, (h, w)) < 0.12
+    speckle_chance = rng.random((h, w), dtype=np.float32) < 0.12
     speckle_mask = outside & speckle_chance
     new_alpha[speckle_mask] = rng.uniform(20, 70, size=int(speckle_mask.sum()))
 
@@ -1144,7 +1165,7 @@ def _apply_edge_roughness(layer: Image.Image) -> Image.Image:
     arr[:, :, 3] = new_alpha.astype(np.uint8)
 
     # 3) Color darkening at edges (paint pooling)
-    darken = edge * rng.uniform(0.3, 1.0, (h, w)).astype(np.float32) * 18
+    darken = edge * (0.3 + 0.7 * rng.random((h, w), dtype=np.float32)) * 18
     for c in range(3):
         ch = arr[:, :, c].astype(np.float32)
         arr[:, :, c] = np.clip(ch - darken, 0, 255).astype(np.uint8)
@@ -1156,8 +1177,15 @@ def _apply_edge_roughness(layer: Image.Image) -> Image.Image:
 # Shape layer rendering
 # ------------------------------------------------------------------
 
-def _render_shape_layer(shape: Shape, width: int, height: int,
-                        palette: list[tuple]) -> Image.Image:
+def _composite_shape(canvas: Image.Image, shape: Shape,
+                     palette: list[tuple]) -> None:
+    """Draw one painterly shape and alpha-composite it into ``canvas`` in place.
+
+    Only the shape's own bounding box is touched: the scratch layer is sized
+    to the shape (not the whole canvas) and blended into the matching canvas
+    region.  This is what keeps large renders from being O(shapes x canvas).
+    """
+    width, height = canvas.size
     rgb = _palette_rgb(palette, shape.color_idx)
     alpha = int(shape.opacity * 255)
     color = rgb + (alpha,)
@@ -1167,8 +1195,9 @@ def _render_shape_layer(shape: Shape, width: int, height: int,
     cx = int(shape.x * width)
     cy = int(shape.y * height)
 
-    diag = int(math.ceil(math.hypot(pw, ph))) + 6
-    half = diag
+    # Every drawer stays within ~0.68 * hypot(pw, ph) of its centre
+    # (the parallelogram skew is the widest case).
+    half = int(math.ceil(0.7 * math.hypot(pw, ph))) + 6
     tmp_size = 2 * half
     tmp = Image.new("RGBA", (tmp_size, tmp_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(tmp)
@@ -1176,18 +1205,56 @@ def _render_shape_layer(shape: Shape, width: int, height: int,
     drawer = _SHAPE_DRAWERS.get(shape.kind, _draw_rect)
     drawer(draw, half, half, pw, ph, color)
 
-    tmp = _apply_shape_texture(tmp, strength=14.0)
-    tmp = _apply_edge_roughness(tmp)
+    # Texture + edge roughness only need to see the painted pixels.
+    bbox = tmp.getbbox()
+    if bbox is None:
+        return
+    x0 = max(0, bbox[0] - 3)
+    y0 = max(0, bbox[1] - 3)
+    x1 = min(tmp_size, bbox[2] + 3)
+    y1 = min(tmp_size, bbox[3] + 3)
+    region = tmp.crop((x0, y0, x1, y1))
+    region = _apply_shape_texture(region, strength=14.0)
+    region = _apply_edge_roughness(region)
+
+    # Offset of the painted region's centre from the shape centre.
+    rcx = (x0 + x1) / 2.0 - half
+    rcy = (y0 + y1) / 2.0 - half
 
     if shape.rotation % 360 != 0:
-        tmp = tmp.rotate(-shape.rotation, resample=Image.BICUBIC,
-                         center=(half, half))
+        # Rotate just the painted region (expanded to fit) rather than the
+        # whole scratch square, then move its centre to where the rotation
+        # about the shape centre would have put it.
+        region = region.rotate(-shape.rotation, resample=Image.BICUBIC,
+                               expand=True)
+        th = math.radians(shape.rotation)
+        c, sn = math.cos(th), math.sin(th)
+        rcx, rcy = rcx * c - rcy * sn, rcx * sn + rcy * c
 
-    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    paste_x = cx - half
-    paste_y = cy - half
-    layer.paste(tmp, (paste_x, paste_y), tmp)
-    return layer
+    # Mask-paste onto a transparent layer (kept from the original pipeline:
+    # it gives translucent shapes their characteristic soft, deeper look).
+    soft = Image.new("RGBA", region.size, (0, 0, 0, 0))
+    soft.paste(region, (0, 0), region)
+
+    rw, rh = soft.size
+    dx = int(round(cx + rcx - rw / 2.0))
+    dy = int(round(cy + rcy - rh / 2.0))
+    cx0 = max(0, dx)
+    cy0 = max(0, dy)
+    cx1 = min(width, dx + rw)
+    cy1 = min(height, dy + rh)
+    if cx1 <= cx0 or cy1 <= cy0:
+        return
+    canvas.alpha_composite(
+        soft.crop((cx0 - dx, cy0 - dy, cx1 - dx, cy1 - dy)), (cx0, cy0))
+
+
+def _composite_layer(canvas: Image.Image, layer: Image.Image) -> None:
+    """alpha_composite a full-size sparse layer, touching only its bbox."""
+    bbox = layer.getbbox()
+    if bbox is None:
+        return
+    canvas.alpha_composite(layer.crop(bbox), (bbox[0], bbox[1]))
 
 
 # ------------------------------------------------------------------
@@ -1281,49 +1348,114 @@ def _apply_cinematic_finish(image: Image.Image, genome: ShapeGenome) -> Image.Im
     return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), image.mode)
 
 
+_FIBER_NORM: np.ndarray | None = None
+
+
+def _fiber_band(y0: int, y1: int, width: int) -> np.ndarray:
+    """Rows ``y0:y1`` of the fiber texture tiled to ``width`` (float32, [-1, 1]).
+
+    Built per band so full-size renders never hold a canvas-sized texture.
+    """
+    global _FIBER_NORM
+    if _FIBER_NORM is None:
+        _FIBER_NORM = (np.array(_get_fiber_tile()).astype(np.float32) - 128.0) / 128.0
+    ts = _FIBER_TILE_SIZE
+    rows = _FIBER_NORM.take(np.arange(y0, y1) % ts, axis=0)
+    reps = (width + ts - 1) // ts
+    return np.tile(rows, (1, reps))[:, :width]
+
+
+_FINISH_BAND = 256
+
+
+def _apply_finish(image: Image.Image, texture: float, grain: float,
+                  gradient: float) -> Image.Image:
+    """Canvas fibers + film grain + warm/cool gradient in a single pass.
+
+    Equivalent to ``_apply_canvas_texture`` -> ``_apply_grain`` ->
+    ``_apply_color_gradient`` (all three are additive per channel), applied
+    in horizontal bands so that memory stays bounded even for 8k canvases.
+    """
+    arr = np.asarray(image)
+    h, w = arr.shape[:2]
+    out = np.empty_like(arr)
+    rng = np.random.default_rng() if grain > 0 else None
+    xs = np.linspace(0, 0.5, w, dtype=np.float32)[None, :]
+    ys_all = np.linspace(0, 0.5, h, dtype=np.float32)
+
+    for y0 in range(0, h, _FINISH_BAND):
+        y1 = min(h, y0 + _FINISH_BAND)
+        base = _fiber_band(y0, y1, w) * np.float32(texture)
+        if rng is not None:
+            base += rng.standard_normal((y1 - y0, w), dtype=np.float32) * np.float32(grain)
+        if gradient > 0:
+            diag = ys_all[y0:y1, None] + xs
+            warm = (1.0 - diag) * np.float32(gradient)
+            cool = diag * np.float32(gradient)
+            deltas = (warm * np.float32(0.7), warm * np.float32(0.3),
+                      cool * np.float32(0.5))
+        else:
+            deltas = (None, None, None)
+        for c in range(3):
+            ch = arr[y0:y1, :, c].astype(np.float32)
+            ch += base
+            if deltas[c] is not None:
+                ch += deltas[c]
+            np.clip(ch, 0, 255, out=ch)
+            out[y0:y1, :, c] = ch.astype(np.uint8)
+    return Image.fromarray(out, image.mode)
+
+
 # Render settings (module-level defaults, updated by server)
 GRAIN_STRENGTH: float = 8.0
 GRADIENT_STRENGTH: float = 10.0
 
 
 def render_genome(genome: ShapeGenome, width: int, height: int,
-                  palette: list[tuple] | None = None) -> Image.Image:
+                  palette: list[tuple] | None = None,
+                  grain: float | None = None,
+                  gradient: float | None = None) -> Image.Image:
+    """Render a genome.  ``grain``/``gradient`` default to the module-level
+    settings; pass them explicitly when rendering in worker processes."""
     if palette is None:
         palette = DEFAULT_PALETTE
+    if grain is None:
+        grain = GRAIN_STRENGTH
+    if gradient is None:
+        gradient = GRADIENT_STRENGTH
 
     if genome.projection_strength > 0.01:
-        return _render_genome_3d(genome, width, height, palette)
+        return _render_genome_3d(genome, width, height, palette, grain, gradient)
 
-    iw = width * _SUPERSAMPLE
-    ih = height * _SUPERSAMPLE
+    ss = _supersample_for(width, height)
+    iw = width * ss
+    ih = height * ss
 
     bg_rgb = _palette_rgb(palette, genome.bg_color_idx)
     canvas = Image.new("RGBA", (iw, ih), bg_rgb + (255,))
 
     for shape in genome.flatten():
-        layer = _render_shape_layer(shape, iw, ih, palette)
-        canvas = Image.alpha_composite(canvas, layer)
+        _composite_shape(canvas, shape, palette)
 
-    result = canvas.convert("RGB")
-    result = _apply_canvas_texture(result, strength=14.0)
-    result = _apply_grain(result, strength=GRAIN_STRENGTH)
-    result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
+    result = _apply_finish(canvas.convert("RGB"), 14.0, grain, gradient)
 
-    if _SUPERSAMPLE > 1:
+    if ss > 1:
         result = result.resize((width, height), Image.LANCZOS)
 
     return result
 
 
 def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
-                       palette: list[tuple]) -> Image.Image:
+                       palette: list[tuple], grain: float,
+                       gradient: float) -> Image.Image:
     """Render genome with oblique 3D projection (Hadid / Architecton style).
 
     Shapes are sorted by elevation (painter's algorithm) and rendered
     as cuboids with face shading and architectural edge lines.
     """
-    iw = width * _SUPERSAMPLE
-    ih = height * _SUPERSAMPLE
+    ss = _supersample_for(width, height)
+    iw = width * ss
+    ih = height * ss
 
     bg_rgb = _palette_rgb(palette, genome.bg_color_idx)
     canvas = Image.new("RGBA", (iw, ih), bg_rgb + (255,))
@@ -1336,20 +1468,17 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
     all_shapes.sort(key=lambda s: s.elevation)
 
     for shape in all_shapes:
-        layer = _render_cuboid_layer(
+        _composite_layer(canvas, _render_cuboid_layer(
             shape, iw, ih, palette, genome,
-        )
-        canvas = Image.alpha_composite(canvas, layer)
+        ))
 
     result = canvas.convert("RGB")
     result = _apply_atmospheric_blend(result, genome, palette)
     # Subtle canvas texture (lighter than flat mode for cleaner architectural look)
-    result = _apply_canvas_texture(result, strength=6.0)
-    result = _apply_grain(result, strength=GRAIN_STRENGTH)
-    result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
+    result = _apply_finish(result, 6.0, grain, gradient)
     result = _apply_cinematic_finish(result, genome)
 
-    if _SUPERSAMPLE > 1:
+    if ss > 1:
         result = result.resize((width, height), Image.LANCZOS)
 
     return result
@@ -1357,7 +1486,9 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
 
 def render_genome_extended(genome: ShapeGenome, square_size: int,
                            orientation: str = "square",
-                           palette: list[tuple] | None = None) -> Image.Image:
+                           palette: list[tuple] | None = None,
+                           grain: float | None = None,
+                           gradient: float | None = None) -> Image.Image:
     """Render with extended canvas for landscape or portrait output.
 
     Background is rendered at the full extended dimensions so patterns
@@ -1367,9 +1498,14 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
     """
     if palette is None:
         palette = DEFAULT_PALETTE
+    if grain is None:
+        grain = GRAIN_STRENGTH
+    if gradient is None:
+        gradient = GRADIENT_STRENGTH
 
     if orientation == "square":
-        return render_genome(genome, square_size, square_size, palette)
+        return render_genome(genome, square_size, square_size, palette,
+                             grain, gradient)
 
     if orientation == "landscape":
         out_w = int(square_size * 1.5)
@@ -1378,10 +1514,11 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
         out_w = square_size
         out_h = int(square_size * 1.5)
 
-    iw = out_w * _SUPERSAMPLE
-    ih = out_h * _SUPERSAMPLE
-    sq_iw = square_size * _SUPERSAMPLE
-    sq_ih = square_size * _SUPERSAMPLE
+    ss = _supersample_for(out_w, out_h)
+    iw = out_w * ss
+    ih = out_h * ss
+    sq_iw = square_size * ss
+    sq_ih = square_size * ss
     off_x = (iw - sq_iw) // 2
     off_y = (ih - sq_ih) // 2
 
@@ -1398,28 +1535,23 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
     if is_3d:
         all_shapes.sort(key=lambda s: s.elevation)
         for shape in all_shapes:
-            layer = _render_cuboid_layer(shape, sq_iw, sq_ih, palette, genome)
-            shapes_layer = Image.alpha_composite(shapes_layer, layer)
+            _composite_layer(shapes_layer, _render_cuboid_layer(
+                shape, sq_iw, sq_ih, palette, genome))
     else:
         for shape in all_shapes:
-            layer = _render_shape_layer(shape, sq_iw, sq_ih, palette)
-            shapes_layer = Image.alpha_composite(shapes_layer, layer)
+            _composite_shape(shapes_layer, shape, palette)
 
     canvas.paste(shapes_layer, (off_x, off_y), shapes_layer)
 
     result = canvas.convert("RGB")
     if is_3d:
         result = _apply_atmospheric_blend(result, genome, palette)
-        result = _apply_canvas_texture(result, strength=6.0)
-        result = _apply_grain(result, strength=GRAIN_STRENGTH)
-        result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
+        result = _apply_finish(result, 6.0, grain, gradient)
         result = _apply_cinematic_finish(result, genome)
     else:
-        result = _apply_canvas_texture(result, strength=14.0)
-        result = _apply_grain(result, strength=GRAIN_STRENGTH)
-        result = _apply_color_gradient(result, strength=GRADIENT_STRENGTH)
+        result = _apply_finish(result, 14.0, grain, gradient)
 
-    if _SUPERSAMPLE > 1:
+    if ss > 1:
         result = result.resize((out_w, out_h), Image.LANCZOS)
 
     return result
