@@ -18,7 +18,7 @@ import os
 import threading
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -36,17 +36,30 @@ from src.cppn.activations import MALEVICH_ACTIVATIONS, ALL_ACTIVATIONS
 
 from src.shapes.population import ShapePopulation
 from src.shapes.renderer import render_genome, render_genome_extended
-import src.shapes.renderer as _shape_renderer
+from src import render_pool
 
 OUTPUT_DIR = Path("output")
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _prefetch_home():
+    """Warm the worker pool and pre-render the landing-page galleries so the
+    first visitor doesn't wait for them."""
+    try:
+        render_pool.warm_up()
+        state.get_home_samples()
+        _build_infographic()
+    except Exception as exc:  # a failed warm-up must never take the server down
+        print(f"[prefetch] skipped: {exc}")
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     OUTPUT_DIR.mkdir(exist_ok=True)
     state.initialize()
+    threading.Thread(target=_prefetch_home, daemon=True).start()
     yield
+    render_pool.shutdown()
 
 
 app = FastAPI(title="Suprematism Evolution", lifespan=lifespan)
@@ -63,13 +76,22 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class _GenerationSnapshot:
-    """Lightweight snapshot of a generation for history navigation."""
-    __slots__ = ("generation", "genomes", "thumbnails")
+    """A generation for history navigation.
 
-    def __init__(self, generation: int, genomes: list, thumbnails: list[str]):
+    ``thumbnails`` holds base64 JPEGs, with ``None`` for any not rendered
+    yet -- they are filled in as the stream endpoint completes them.
+    ``render_key`` records the render settings the thumbnails were drawn with
+    so they are discarded if those settings later change.
+    """
+    __slots__ = ("rev", "generation", "genomes", "thumbnails", "render_key")
+
+    def __init__(self, rev: int, generation: int, genomes: list,
+                 thumbnails: list, render_key: tuple):
+        self.rev = rev
         self.generation = generation
         self.genomes = genomes
         self.thumbnails = thumbnails
+        self.render_key = render_key
 
 
 class AppState:
@@ -88,8 +110,10 @@ class AppState:
         self.crossover_rate: float = 0.7
         self.grain_strength: float = 8.0
         self.gradient_strength: float = 10.0
-        self._cached_thumbnails: list[str] = []
         self._networks = []
+        self._rev: int = 0
+        self.lock = threading.RLock()
+        self._home_lock = threading.Lock()
 
         self._history: list[_GenerationSnapshot] = []
         self._history_idx: int = -1
@@ -165,18 +189,45 @@ class AppState:
             self.pop = Population(self._build_cppn_config())
             self.pop.initialize()
             self.shape_pop = None
-        self._render_thumbnails()
+        if self.engine == "cppn":
+            self._networks = self.pop.get_networks()
         self._history = []
         self._history_idx = -1
         self._push_history()
 
     # ---- History ----
 
+    def _is_shapes(self) -> bool:
+        return self.engine in ("shapes", "hadid", "maps")
+
+    def _render_key(self) -> tuple:
+        if self._is_shapes():
+            return (self.engine, self.thumb_size,
+                    self.grain_strength, self.gradient_strength)
+        return (self.engine, self.palette, self.color_mode, self.thumb_size)
+
+    @property
+    def _cached_thumbnails(self) -> list:
+        return self._history[self._history_idx].thumbnails
+
+    def _new_rev(self) -> int:
+        self._rev += 1
+        return self._rev
+
+    def invalidate_thumbnails(self):
+        """Drop the current generation's thumbnails; they re-render on demand."""
+        snap = self._history[self._history_idx]
+        snap.thumbnails = [None] * len(snap.genomes)
+        snap.render_key = self._render_key()
+        snap.rev = self._new_rev()
+
     def _push_history(self):
         genomes = self._current_genomes()
         gen = self._current_generation()
         genome_copies = [g.copy() for g in genomes]
-        snap = _GenerationSnapshot(gen, genome_copies, list(self._cached_thumbnails))
+        snap = _GenerationSnapshot(self._new_rev(), gen, genome_copies,
+                                   [None] * len(genome_copies),
+                                   self._render_key())
 
         if self._history_idx < len(self._history) - 1:
             self._history = self._history[: self._history_idx + 1]
@@ -189,7 +240,11 @@ class AppState:
     def _restore_snapshot(self, idx: int):
         snap = self._history[idx]
         self._history_idx = idx
-        self._cached_thumbnails = list(snap.thumbnails)
+        if snap.render_key != self._render_key():
+            # Render settings changed since this generation was drawn.
+            snap.thumbnails = [None] * len(snap.genomes)
+            snap.render_key = self._render_key()
+            snap.rev = self._new_rev()
 
         if self.engine in ("shapes", "hadid", "maps") and self.shape_pop:
             self.shape_pop.genomes = [g.copy() for g in snap.genomes]
@@ -211,31 +266,44 @@ class AppState:
 
     # ---- Thumbnails ----
 
-    def _sync_render_settings(self):
-        _shape_renderer.GRAIN_STRENGTH = self.grain_strength
-        _shape_renderer.GRADIENT_STRENGTH = self.gradient_strength
+    def stream_thumbs(self, rev: int):
+        """Yield ``{"i": index, "img": base64-jpeg}`` for each thumbnail of the
+        current generation that isn't rendered yet, as each one completes."""
+        with self.lock:
+            snap = self._history[self._history_idx]
+            if snap.rev != rev:
+                yield {"stale": True}
+                return
+            thumbs = snap.thumbnails          # filled in place as results land
+            missing = [i for i, t in enumerate(thumbs) if t is None]
+            shapes = self._is_shapes()
+            size = self.thumb_size
+            if shapes:
+                genomes = [snap.genomes[i] for i in missing]
+                palette = self._shape_palette()
+                grain, gradient = self.grain_strength, self.gradient_strength
+            else:
+                palette_array = get_palette_array(self.palette)
+                networks = list(self._networks)
+                cppn_genomes = list(self.pop.genomes)
+                color_mode = self.color_mode
 
-    def _render_thumbnails(self):
-        self._cached_thumbnails = []
-        self._sync_render_settings()
-
-        if self.engine in ("shapes", "hadid", "maps"):
-            palette = self._shape_palette()
-            for genome in self.shape_pop.genomes:
-                img = render_genome(genome, self.thumb_size, self.thumb_size, palette)
-                self._cached_thumbnails.append(_image_to_base64(img))
+        if shapes:
+            for k, data in _render_stream(genomes, size, palette, grain, gradient):
+                i = missing[k]
+                thumbs[i] = _b64(data)
+                yield {"i": i, "img": thumbs[i]}
         else:
-            palette_array = get_palette_array(self.palette)
-            self._networks = self.pop.get_networks()
-            for i, net in enumerate(self._networks):
-                g = self.pop.genomes[i]
+            for i in missing:
+                g = cppn_genomes[i]
                 img = render_to_image(
-                    net, self.thumb_size, self.thumb_size,
-                    self.color_mode, palette_array,
+                    networks[i], size, size, color_mode, palette_array,
                     focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
                     armature_angle=g.comp_armature_angle,
                 )
-                self._cached_thumbnails.append(_image_to_base64(img))
+                thumbs[i] = _b64(_encode_jpeg(img))
+                yield {"i": i, "img": thumbs[i]}
+        yield {"done": True, "rev": rev}
 
     def _render_home_style_samples(self, style: str, count: int = 6, size: int = 280) -> list[str]:
         """Generate a small gallery for the Home page without mutating live state."""
@@ -263,20 +331,18 @@ class AppState:
         else:
             demo_pop.initialize()
 
-        self._sync_render_settings()
-        return [
-            _image_to_base64(render_genome(genome, size, size, palette))
-            for genome in demo_pop.genomes[:count]
-        ]
+        return _render_all(demo_pop.genomes[:count], size, palette,
+                           self.grain_strength, self.gradient_strength)
 
     def get_home_samples(self, refresh: bool = False) -> dict[str, list[str]]:
-        if self._home_samples_cache is None or refresh:
-            self._home_samples_cache = {
-                "malevich": self._render_home_style_samples("shapes"),
-                "hadid": self._render_home_style_samples("hadid"),
-                "maps": self._render_home_style_samples("maps"),
-            }
-        return self._home_samples_cache
+        with self._home_lock:
+            if self._home_samples_cache is None or refresh:
+                self._home_samples_cache = {
+                    "malevich": self._render_home_style_samples("shapes"),
+                    "hadid": self._render_home_style_samples("hadid"),
+                    "maps": self._render_home_style_samples("maps"),
+                }
+            return self._home_samples_cache
 
     # ---- State payload ----
 
@@ -303,7 +369,8 @@ class AppState:
             "crossover_rate": self.crossover_rate,
             "grain_strength": self.grain_strength,
             "gradient_strength": self.gradient_strength,
-            "thumbnails": self._cached_thumbnails,
+            "thumbnails": list(self._cached_thumbnails),
+            "rev": self._history[self._history_idx].rev,
             "has_prev": self.can_go_prev(),
             "has_next": self.can_go_next(),
         }
@@ -338,7 +405,8 @@ class AppState:
             self.pop.set_fitness(fitness)
             self.pop.evolve()
 
-        self._render_thumbnails()
+        if self.engine == "cppn":
+            self._networks = self.pop.get_networks()
         self._push_history()
 
     # ---- Export ----
@@ -347,15 +415,22 @@ class AppState:
         """Render one individual at full resolution; returns the saved filename."""
         OUTPUT_DIR.mkdir(exist_ok=True)
         gen = self._current_generation()
+        suffix = f"_{orientation}" if orientation != "square" else ""
+        path = OUTPUT_DIR / f"hires_{gen:04d}_{index:02d}{suffix}.png"
 
-        if self.engine in ("shapes", "hadid", "maps"):
-            palette = self._shape_palette()
-            genome = self.shape_pop.genomes[index]
-            if orientation in ("landscape", "portrait"):
-                img = render_genome_extended(
-                    genome, self.hires_size, orientation, palette)
-            else:
-                img = render_genome(genome, self.hires_size, self.hires_size, palette)
+        if self._is_shapes():
+            fut = render_pool.submit_hires(
+                self.shape_pop.genomes[index].copy(), self.hires_size,
+                orientation, self._shape_palette(),
+                self.grain_strength, self.gradient_strength)
+            try:
+                data = fut.result()
+            except Exception:  # pool unavailable -> render inline
+                data = render_pool.render_hires_task(
+                    self.shape_pop.genomes[index].copy(), self.hires_size,
+                    orientation, self._shape_palette(),
+                    self.grain_strength, self.gradient_strength)
+            path.write_bytes(data)
         else:
             palette_array = get_palette_array(self.palette)
             net = self._networks[index]
@@ -366,10 +441,7 @@ class AppState:
                 focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
                 armature_angle=g.comp_armature_angle,
             )
-
-        suffix = f"_{orientation}" if orientation != "square" else ""
-        path = OUTPUT_DIR / f"hires_{gen:04d}_{index:02d}{suffix}.png"
-        img.save(path, compress_level=1)
+            img.save(path, compress_level=1)
         return path.name
 
     def start_export_all(self) -> str:
@@ -389,15 +461,16 @@ class AppState:
                "gen": gen, "path": None, "error": None}
         _export_jobs[job_id] = job
 
+        grain, gradient = self.grain_strength, self.gradient_strength
+        # Hadid's 3D post-processing needs ~2 GB per in-flight render.
+        inflight = 3 if self.engine == "hadid" else None
+
         def render_one(i):
-            if shapes:
-                img = render_genome(genomes[i], res, res, palette)
-            else:
-                g = cppn_genomes[i]
-                img = render_to_image(
-                    networks[i], res, res, color_mode, palette_array,
-                    focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
-                    armature_angle=g.comp_armature_angle)
+            g = cppn_genomes[i]
+            img = render_to_image(
+                networks[i], res, res, color_mode, palette_array,
+                focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                armature_angle=g.comp_armature_angle)
             b = io.BytesIO()
             img.save(b, format="PNG", compress_level=1)
             job["done"] += 1
@@ -407,11 +480,20 @@ class AppState:
             try:
                 OUTPUT_DIR.mkdir(exist_ok=True)
                 path = OUTPUT_DIR / f"gen{gen:04d}_all_{job_id}.zip"
-                workers = min(4, os.cpu_count() or 2)
-                with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as zf, \
-                        ThreadPoolExecutor(max_workers=workers) as ex:
-                    for i, data in ex.map(render_one, range(len(genomes))):
-                        zf.writestr(f"gen{gen:04d}_{i:02d}.png", data)
+                with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as zf:
+                    if shapes:
+                        # Fan the whole population out over the process pool and
+                        # write each PNG into the zip as soon as it finishes.
+                        for i, data in _render_stream(
+                                genomes, res, palette, grain, gradient, "png",
+                                max_inflight=inflight):
+                            zf.writestr(f"gen{gen:04d}_{i:02d}.png", data)
+                            job["done"] += 1
+                    else:
+                        workers = min(4, os.cpu_count() or 2)
+                        with ThreadPoolExecutor(max_workers=workers) as ex:
+                            for i, data in ex.map(render_one, range(len(genomes))):
+                                zf.writestr(f"gen{gen:04d}_{i:02d}.png", data)
                 job["path"] = path
                 job["status"] = "done"
             except Exception as e:  # noqa: BLE001
@@ -444,6 +526,68 @@ def _image_to_base64(img) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+def _encode_jpeg(img) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
+def _render_stream(genomes, size, palette, grain, gradient, fmt="jpeg",
+                   max_inflight=None):
+    """Render genomes on the process pool, yielding ``(index, bytes)`` in
+    completion order.
+
+    ``max_inflight`` bounds how many renders are queued at once (large
+    exports use a lot of memory per worker).  Pending work is cancelled if
+    the consumer goes away -- e.g. the browser aborts the request -- and a
+    broken pool falls back to rendering in-process.
+    """
+    limit = max_inflight or len(genomes) or 1
+    todo = iter(enumerate(genomes))
+    pending = {}
+    try:
+        while True:
+            while len(pending) < limit:
+                nxt = next(todo, None)
+                if nxt is None:
+                    break
+                i, g = nxt
+                try:
+                    fut = render_pool.submit_render(g, size, palette, grain,
+                                                    gradient, fmt)
+                except Exception:   # pool unusable -> render this one inline
+                    yield i, render_pool.render_task(g, size, palette, grain,
+                                                     gradient, fmt)
+                    continue
+                pending[fut] = i
+            if not pending:
+                return
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for f in done:
+                i = pending.pop(f)
+                try:
+                    data = f.result()
+                except Exception:
+                    data = render_pool.render_task(genomes[i], size, palette,
+                                                   grain, gradient, fmt)
+                yield i, data
+    finally:
+        for f in pending:
+            f.cancel()
+
+
+def _render_all(genomes, size, palette, grain, gradient) -> list[str]:
+    """Render genomes in parallel; returns base64 JPEGs in input order."""
+    out = [""] * len(genomes)
+    for i, data in _render_stream(genomes, size, palette, grain, gradient):
+        out[i] = _b64(data)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -587,11 +731,8 @@ def api_settings(req: SettingsRequest):
     if req.gradient_strength is not None:
         state.gradient_strength = max(0.0, min(30.0, req.gradient_strength))
         rerender = True
-    if rerender and state.shape_pop:
-        state._render_thumbnails()
-        # Update current history snapshot thumbnails
-        if state._history and state._history_idx >= 0:
-            state._history[state._history_idx].thumbnails = list(state._cached_thumbnails)
+    if rerender and state.shape_pop and state._history:
+        state.invalidate_thumbnails()   # re-rendered lazily via /api/thumbs/stream
     return JSONResponse(state.get_state_payload())
 
 
@@ -600,55 +741,62 @@ def api_home_samples():
     return JSONResponse(state.get_home_samples())
 
 
+_infographic_lock = threading.Lock()
+
+
+def _build_infographic(refresh: bool = False) -> dict:
+    """Demo images showing the evolution process for the home-page infographic."""
+    with _infographic_lock:
+        if not refresh and state._infographic_cache:
+            return state._infographic_cache
+
+        palette = list(SUPREMATIST_PALETTE.values())
+        size = 280
+        grain, gradient = state.grain_strength, state.gradient_strength
+
+        config = {
+            "pop_size": 6,
+            "num_palette_colors": len(palette),
+            "elitism": 1,
+            "crossover_rate": 0.7,
+            "tournament_k": 2,
+            "mutation_strength": 1.0,
+        }
+
+        demo = ShapePopulation(config)
+        demo.initialize()
+        parents = _render_all(demo.genomes, size, palette, grain, gradient)
+
+        sel = [1, 4]
+        demo.evolve_with_selection(sel)
+        children = _render_all(demo.genomes, size, palette, grain, gradient)
+
+        result = {
+            "parents": parents,
+            "selected": sel,
+            "parent_a": parents[sel[0]],
+            "parent_b": parents[sel[1]],
+            "child_demo": children[0],
+            "children": children,
+        }
+        state._infographic_cache = result
+        return result
+
+
 @app.get("/api/infographic")
 def api_infographic(refresh: int = 0):
-    """Generate demo images showing the evolution process for the infographic."""
-    if not refresh and state._infographic_cache:
-        return JSONResponse(state._infographic_cache)
+    return JSONResponse(_build_infographic(bool(refresh)))
 
-    palette = list(SUPREMATIST_PALETTE.values())
-    size = 280
-    state._sync_render_settings()
 
-    config = {
-        "pop_size": 6,
-        "num_palette_colors": len(palette),
-        "elitism": 1,
-        "crossover_rate": 0.7,
-        "tournament_k": 2,
-        "mutation_strength": 1.0,
-    }
-
-    demo = ShapePopulation(config)
-    demo.initialize()
-
-    parents = [
-        _image_to_base64(render_genome(g, size, size, palette))
-        for g in demo.genomes
-    ]
-
-    sel = [1, 4]
-    parent_a = parents[sel[0]]
-    parent_b = parents[sel[1]]
-
-    demo.evolve_with_selection(sel)
-
-    children = [
-        _image_to_base64(render_genome(g, size, size, palette))
-        for g in demo.genomes
-    ]
-
-    result = {
-        "parents": parents,
-        "selected": sel,
-        "parent_a": parent_a,
-        "parent_b": parent_b,
-        "child_demo": children[0],
-        "children": children,
-    }
-
-    state._infographic_cache = result
-    return JSONResponse(result)
+@app.get("/api/thumbs/stream")
+def api_thumbs_stream(rev: int):
+    """NDJSON stream: one line per thumbnail as it finishes rendering."""
+    def lines():
+        for item in state.stream_thumbs(rev):
+            yield json.dumps(item, separators=(",", ":")) + "\n"
+    return StreamingResponse(
+        lines(), media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/prev")

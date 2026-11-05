@@ -668,7 +668,15 @@ body{display:flex;flex-direction:column;overflow:hidden}
   cursor:pointer;
   transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease;
 }
-.cell img{width:100%;height:100%;object-fit:cover;display:block}
+.cell img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .2s ease}
+.cell.pending img,.art-thumb.pending img{opacity:0}
+.cell.pending,.art-thumb.pending{
+  cursor:progress;
+  background:linear-gradient(100deg,var(--surface) 30%,var(--surface-muted) 50%,var(--surface) 70%);
+  background-size:220% 100%;
+  animation:shimmer 1.1s linear infinite;
+}
+@keyframes shimmer{to{background-position:-220% 0}}
 .cell:hover{
   transform:translateY(-1px);
   box-shadow:0 6px 24px rgba(0,0,0,.12);
@@ -759,7 +767,11 @@ body{display:flex;flex-direction:column;overflow:hidden}
   max-width:80vw;
   max-height:72vh;
   border-radius:8px;
+  transition:filter .25s ease;
 }
+.modal img.rendering{filter:blur(6px) saturate(.8)}
+.modal-status{font-size:.8rem;color:var(--text-dim);min-height:1.1em}
+.modal-actions .btn.disabled{opacity:.4;pointer-events:none}
 .modal-actions{
   display:flex;
   gap:8px;
@@ -1035,6 +1047,7 @@ body{display:flex;flex-direction:column;overflow:hidden}
 <div class="modal-backdrop hidden" id="modal-backdrop">
   <div class="modal">
     <img id="modal-img" src="" alt="Hi-res export">
+    <div class="modal-status" id="modal-status"></div>
     <div class="modal-actions">
       <a class="btn btn-primary" id="modal-download" download="export.png" href="#">Download</a>
       <button class="btn btn-secondary" id="modal-close">Close</button>
@@ -1092,6 +1105,7 @@ const modalBackdrop = $('#modal-backdrop');
 const modalImg = $('#modal-img');
 const modalDownload = $('#modal-download');
 const modalClose = $('#modal-close');
+const modalStatus = $('#modal-status');
 
 let activeRoute = 'home';
 let selected = new Set();
@@ -1163,10 +1177,18 @@ function renderHomeGallery(container, images){
     return;
   }
   container.innerHTML = images.map((b64, i) => `
-    <div class="art-thumb" title="Artwork ${i}">
-      <img src="data:image/png;base64,${b64}" alt="Artwork ${i}">
+    <div class="art-thumb${b64 ? '' : ' pending'}" title="Artwork ${i}">
+      <img ${b64 ? `src="data:image/jpeg;base64,${b64}"` : ''} alt="Artwork ${i}">
     </div>
   `).join('');
+}
+
+function fillHomeLive(i, b64){
+  const el = homeLiveGrid.children[i];
+  if(!el) return;
+  const img = el.querySelector('img');
+  if(img) img.src = 'data:image/jpeg;base64,' + b64;
+  el.classList.remove('pending');
 }
 
 async function loadInfographic(refresh){
@@ -1190,7 +1212,7 @@ async function loadInfographic(refresh){
         '</p>'+
         '<div class="ig-grid">'+
           d.parents.map(function(b,i){
-            return '<div class="ig-img"><img src="data:image/png;base64,'+b+'" alt="Genome '+i+'"></div>';
+            return '<div class="ig-img"><img src="data:image/jpeg;base64,'+b+'" alt="Genome '+i+'"></div>';
           }).join('')+
         '</div>'+
         '<div class="ig-math">'+
@@ -1218,7 +1240,7 @@ async function loadInfographic(refresh){
         '</p>'+
         '<div class="ig-grid">'+
           d.parents.map(function(b,i){
-            return '<div class="ig-img'+(sel.has(i)?' ig-selected':'')+'"><img src="data:image/png;base64,'+b+'" alt="Genome '+i+'"></div>';
+            return '<div class="ig-img'+(sel.has(i)?' ig-selected':'')+'"><img src="data:image/jpeg;base64,'+b+'" alt="Genome '+i+'"></div>';
           }).join('')+
         '</div>'+
         '<div class="ig-math">'+
@@ -1244,17 +1266,17 @@ async function loadInfographic(refresh){
         '</p>'+
         '<div class="ig-crossover">'+
           '<div class="ig-par">'+
-            '<img src="data:image/png;base64,'+d.parent_a+'" alt="Parent A">'+
+            '<img src="data:image/jpeg;base64,'+d.parent_a+'" alt="Parent A">'+
             '<div class="lbl">Parent A</div>'+
           '</div>'+
           '<div class="ig-sym">\u00d7</div>'+
           '<div class="ig-par">'+
-            '<img src="data:image/png;base64,'+d.parent_b+'" alt="Parent B">'+
+            '<img src="data:image/jpeg;base64,'+d.parent_b+'" alt="Parent B">'+
             '<div class="lbl">Parent B</div>'+
           '</div>'+
           '<div class="ig-sym">\u2192</div>'+
           '<div class="ig-child-wrap">'+
-            '<img src="data:image/png;base64,'+d.child_demo+'" alt="Offspring">'+
+            '<img src="data:image/jpeg;base64,'+d.child_demo+'" alt="Offspring">'+
             '<div class="lbl">Offspring</div>'+
           '</div>'+
         '</div>'+
@@ -1290,7 +1312,7 @@ async function loadInfographic(refresh){
         '</p>'+
         '<div class="ig-grid">'+
           d.children.map(function(b,i){
-            return '<div class="ig-img"><img src="data:image/png;base64,'+b+'" alt="Child '+i+'"></div>';
+            return '<div class="ig-img"><img src="data:image/jpeg;base64,'+b+'" alt="Child '+i+'"></div>';
           }).join('')+
         '</div>'+
         '<div class="ig-math">'+
@@ -1346,9 +1368,9 @@ function renderGrid(data){
 
   thumbnails.forEach((b64, i) => {
     const cell = document.createElement('div');
-    cell.className = 'cell';
+    cell.className = b64 ? 'cell' : 'cell pending';
     cell.innerHTML = `
-      <img src="data:image/png;base64,${b64}" alt="Individual ${i}">
+      <img ${b64 ? `src="data:image/jpeg;base64,${b64}"` : ''} alt="Individual ${i}">
       <span class="idx">${i}</span>
       <span class="check">
         <svg viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1365,16 +1387,68 @@ function renderGrid(data){
 
   updateSelectionUI();
   refreshHomeLive(data);
+
+  // Thumbnails the server hasn't rendered yet arrive over a stream and are
+  // dropped into their cells one by one as each finishes.
+  if(thumbnails.some(t => !t)) streamThumbs(data.rev);
+  else if(thumbStream){ thumbStream.abort(); thumbStream = null; }
 }
 
-async function loadState(){
-  const data = await apiFetch('/api/state');
+let thumbStream = null;
+
+async function streamThumbs(rev){
+  if(thumbStream) thumbStream.abort();
+  const ctl = thumbStream = new AbortController();
+  let stale = false;
+  try{
+    const res = await fetch(`/api/thumbs/stream?rev=${rev}`, { signal: ctl.signal });
+    if(!res.ok || !res.body) throw new Error(`Thumbnail stream failed: ${res.status}`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for(;;){
+      const { done, value } = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while((nl = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if(!line || ctl.signal.aborted) continue;
+        const m = JSON.parse(line);
+        if(m.stale){ stale = true; continue; }
+        if(m.i === undefined) continue;
+        thumbnails[m.i] = m.img;
+        const cell = grid.children[m.i];
+        if(cell){
+          cell.querySelector('img').src = 'data:image/jpeg;base64,' + m.img;
+          cell.classList.remove('pending');
+        }
+        if(m.i < 8) fillHomeLive(m.i, m.img);
+      }
+    }
+  }catch(e){
+    if(e.name !== 'AbortError') console.error(e);
+  }finally{
+    if(thumbStream === ctl) thumbStream = null;
+  }
+  if(stale && !ctl.signal.aborted){
+    // Server state moved on (e.g. changed from another tab) -- resync once.
+    renderGrid(await apiFetch('/api/state', undefined, false));
+  }
+}
+
+function applyFullState(data){
   updateEngineUI(data.engine || 'shapes');
   selMode.value = data.mode;
   selPalette.value = data.palette;
   selColor.value = data.color_mode;
   renderGrid(data);
   evolveLoaded = true;
+}
+
+async function loadState(){
+  applyFullState(await apiFetch('/api/state', undefined, false));
 }
 
 async function loadHomeContent(forceSampleRefresh = false){
@@ -1385,7 +1459,8 @@ async function loadHomeContent(forceSampleRefresh = false){
 
   const [stateData, samples] = await Promise.all([statePromise, samplesPromise]);
   homeSamplesCache = samples;
-  refreshHomeLive(stateData);
+  if(!evolveLoaded) applyFullState(stateData);   // also kicks off thumbnail streaming
+  else refreshHomeLive(stateData);
   renderHomeGallery(homeMalevichGrid, samples.malevich || []);
   renderHomeGallery(homeHadidGrid, samples.hadid || []);
   renderHomeGallery(homeMapsGrid, samples.maps || []);
@@ -1417,7 +1492,7 @@ async function setRoute(route, push = true){
 }
 
 function sendSettings(patch){
-  return apiFetch('/api/settings', patch);
+  return apiFetch('/api/settings', patch, false);
 }
 
 advToggle.addEventListener('click', () => {
@@ -1456,32 +1531,50 @@ slGradient.addEventListener('change', async () => {
 });
 
 btnPrev.addEventListener('click', async () => {
-  const data = await apiFetch('/api/prev', {});
+  const data = await apiFetch('/api/prev', {}, false);
   renderGrid(data);
 });
 
 btnNext.addEventListener('click', async () => {
-  const data = await apiFetch('/api/next', {});
+  const data = await apiFetch('/api/next', {}, false);
   renderGrid(data);
 });
 
 btnEvolve.addEventListener('click', async () => {
-  const data = await apiFetch('/api/evolve', { selected: [...selected] });
+  const data = await apiFetch('/api/evolve', { selected: [...selected] }, false);
   renderGrid(data);
 });
 
+let exportToken = 0;
+
 async function doExport(orientation) {
   const idx = [...selected][0];
-  showLoading();
+  const token = ++exportToken;
+  const suffix = orientation !== 'square' ? `_${orientation}` : '';
+
+  // Open the modal immediately with the thumbnail as a blurred stand-in;
+  // swap in the full-resolution file once it is rendered and decoded.
+  modalImg.src = thumbnails[idx] ? 'data:image/jpeg;base64,' + thumbnails[idx] : '';
+  modalImg.classList.add('rendering');
+  modalDownload.classList.add('disabled');
+  modalDownload.removeAttribute('href');
+  modalStatus.textContent = 'Rendering full resolution\u2026';
+  modalBackdrop.classList.remove('hidden');
+
   try {
-    const data = await apiFetch('/api/export', { index: idx, orientation });
+    const data = await apiFetch('/api/export', { index: idx, orientation }, false);
+    const hi = new Image();
+    hi.src = data.url;
+    await hi.decode();
+    if(token !== exportToken) return;   // modal was closed / another export started
     modalImg.src = data.url;
+    modalImg.classList.remove('rendering');
     modalDownload.href = data.url;
-    const suffix = orientation !== 'square' ? `_${orientation}` : '';
     modalDownload.download = `hires_${genNum.textContent.padStart(4, '0')}_${String(idx).padStart(2, '0')}${suffix}.png`;
-    modalBackdrop.classList.remove('hidden');
-  } finally {
-    hideLoading();
+    modalDownload.classList.remove('disabled');
+    modalStatus.textContent = '';
+  } catch(e) {
+    if(token === exportToken) modalStatus.textContent = 'Export failed: ' + e.message;
   }
 }
 
@@ -1530,14 +1623,14 @@ btnReset.addEventListener('click', async () => {
     pop_size: 24,
     mutation_strength: parseFloat(slMutation.value),
     crossover_rate: parseFloat(slCrossover.value)
-  });
+  }, false);
   updateEngineUI(data.engine || selEngine.value);
   renderGrid(data);
 });
 
 selEngine.addEventListener('change', () => updateEngineUI(selEngine.value));
 
-modalClose.addEventListener('click', () => modalBackdrop.classList.add('hidden'));
+modalClose.addEventListener('click', () => { exportToken++; modalBackdrop.classList.add('hidden'); });
 modalBackdrop.addEventListener('click', e => {
   if(e.target === modalBackdrop) modalBackdrop.classList.add('hidden');
 });

@@ -22,6 +22,15 @@ DEFAULT_PALETTE = list(SUPREMATIST_PALETTE.values())
 
 _SUPERSAMPLE = 2
 
+# Supersampling quadruples memory and time.  Up to this many output pixels
+# (2048x3072, i.e. a 2048 landscape export) we render at 2x; beyond it the
+# render is already so large that edge aliasing is invisible, so we render 1x.
+_SUPERSAMPLE_PIXEL_BUDGET = 2048 * 3072
+
+
+def _supersample_for(width: int, height: int) -> int:
+    return _SUPERSAMPLE if width * height <= _SUPERSAMPLE_PIXEL_BUDGET else 1
+
 # Cached fiber tile (generated once, reused)
 _FIBER_TILE: Image.Image | None = None
 _FIBER_TILE_SIZE = 512
@@ -1152,23 +1161,33 @@ def _composite_shape(canvas: Image.Image, shape: Shape,
     region = tmp.crop((x0, y0, x1, y1))
     region = _apply_shape_texture(region, strength=14.0)
     region = _apply_edge_roughness(region)
-    tmp.paste(region, (x0, y0))
+
+    # Offset of the painted region's centre from the shape centre.
+    rcx = (x0 + x1) / 2.0 - half
+    rcy = (y0 + y1) / 2.0 - half
 
     if shape.rotation % 360 != 0:
-        tmp = tmp.rotate(-shape.rotation, resample=Image.BICUBIC,
-                         center=(half, half))
+        # Rotate just the painted region (expanded to fit) rather than the
+        # whole scratch square, then move its centre to where the rotation
+        # about the shape centre would have put it.
+        region = region.rotate(-shape.rotation, resample=Image.BICUBIC,
+                               expand=True)
+        th = math.radians(shape.rotation)
+        c, sn = math.cos(th), math.sin(th)
+        rcx, rcy = rcx * c - rcy * sn, rcx * sn + rcy * c
 
     # Mask-paste onto a transparent layer (kept from the original pipeline:
     # it gives translucent shapes their characteristic soft, deeper look).
-    soft = Image.new("RGBA", tmp.size, (0, 0, 0, 0))
-    soft.paste(tmp, (0, 0), tmp)
+    soft = Image.new("RGBA", region.size, (0, 0, 0, 0))
+    soft.paste(region, (0, 0), region)
 
-    dx = cx - half
-    dy = cy - half
+    rw, rh = soft.size
+    dx = int(round(cx + rcx - rw / 2.0))
+    dy = int(round(cy + rcy - rh / 2.0))
     cx0 = max(0, dx)
     cy0 = max(0, dy)
-    cx1 = min(width, dx + tmp_size)
-    cy1 = min(height, dy + tmp_size)
+    cx1 = min(width, dx + rw)
+    cy1 = min(height, dy + rh)
     if cx1 <= cx0 or cy1 <= cy0:
         return
     canvas.alpha_composite(
@@ -1274,42 +1293,61 @@ def _apply_cinematic_finish(image: Image.Image, genome: ShapeGenome) -> Image.Im
     return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), image.mode)
 
 
+_FIBER_NORM: np.ndarray | None = None
+
+
+def _fiber_band(y0: int, y1: int, width: int) -> np.ndarray:
+    """Rows ``y0:y1`` of the fiber texture tiled to ``width`` (float32, [-1, 1]).
+
+    Built per band so full-size renders never hold a canvas-sized texture.
+    """
+    global _FIBER_NORM
+    if _FIBER_NORM is None:
+        _FIBER_NORM = (np.array(_get_fiber_tile()).astype(np.float32) - 128.0) / 128.0
+    ts = _FIBER_TILE_SIZE
+    rows = _FIBER_NORM.take(np.arange(y0, y1) % ts, axis=0)
+    reps = (width + ts - 1) // ts
+    return np.tile(rows, (1, reps))[:, :width]
+
+
+_FINISH_BAND = 256
+
+
 def _apply_finish(image: Image.Image, texture: float, grain: float,
                   gradient: float) -> Image.Image:
     """Canvas fibers + film grain + warm/cool gradient in a single pass.
 
     Equivalent to ``_apply_canvas_texture`` -> ``_apply_grain`` ->
-    ``_apply_color_gradient`` (all three are additive per channel) but works
-    one channel at a time so large renders don't allocate several
-    full-image float copies.
+    ``_apply_color_gradient`` (all three are additive per channel), applied
+    in horizontal bands so that memory stays bounded even for 8k canvases.
     """
     arr = np.asarray(image)
     h, w = arr.shape[:2]
     out = np.empty_like(arr)
+    rng = np.random.default_rng() if grain > 0 else None
+    xs = np.linspace(0, 0.5, w, dtype=np.float32)[None, :]
+    ys_all = np.linspace(0, 0.5, h, dtype=np.float32)
 
-    base = _tile_fiber(w, h) * np.float32(texture)
-    if grain > 0:
-        rng = np.random.default_rng()
-        base = base + rng.standard_normal((h, w), dtype=np.float32) * np.float32(grain)
-
-    if gradient > 0:
-        xs = np.linspace(0, 0.5, w, dtype=np.float32)[None, :]
-        ys = np.linspace(0, 0.5, h, dtype=np.float32)[:, None]
-        diag = ys + xs
-        warm = (1.0 - diag) * np.float32(gradient)
-        cool = diag * np.float32(gradient)
-        deltas = (warm * np.float32(0.7), warm * np.float32(0.3),
-                  cool * np.float32(0.5))
-    else:
-        deltas = (None, None, None)
-
-    for c in range(3):
-        ch = arr[:, :, c].astype(np.float32)
-        ch += base
-        if deltas[c] is not None:
-            ch += deltas[c]
-        np.clip(ch, 0, 255, out=ch)
-        out[:, :, c] = ch.astype(np.uint8)
+    for y0 in range(0, h, _FINISH_BAND):
+        y1 = min(h, y0 + _FINISH_BAND)
+        base = _fiber_band(y0, y1, w) * np.float32(texture)
+        if rng is not None:
+            base += rng.standard_normal((y1 - y0, w), dtype=np.float32) * np.float32(grain)
+        if gradient > 0:
+            diag = ys_all[y0:y1, None] + xs
+            warm = (1.0 - diag) * np.float32(gradient)
+            cool = diag * np.float32(gradient)
+            deltas = (warm * np.float32(0.7), warm * np.float32(0.3),
+                      cool * np.float32(0.5))
+        else:
+            deltas = (None, None, None)
+        for c in range(3):
+            ch = arr[y0:y1, :, c].astype(np.float32)
+            ch += base
+            if deltas[c] is not None:
+                ch += deltas[c]
+            np.clip(ch, 0, 255, out=ch)
+            out[y0:y1, :, c] = ch.astype(np.uint8)
     return Image.fromarray(out, image.mode)
 
 
@@ -1334,8 +1372,9 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
     if genome.projection_strength > 0.01:
         return _render_genome_3d(genome, width, height, palette, grain, gradient)
 
-    iw = width * _SUPERSAMPLE
-    ih = height * _SUPERSAMPLE
+    ss = _supersample_for(width, height)
+    iw = width * ss
+    ih = height * ss
 
     bg_rgb = _palette_rgb(palette, genome.bg_color_idx)
     canvas = Image.new("RGBA", (iw, ih), bg_rgb + (255,))
@@ -1345,7 +1384,7 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
 
     result = _apply_finish(canvas.convert("RGB"), 14.0, grain, gradient)
 
-    if _SUPERSAMPLE > 1:
+    if ss > 1:
         result = result.resize((width, height), Image.LANCZOS)
 
     return result
@@ -1376,8 +1415,9 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
     Shapes are sorted by elevation (painter's algorithm) and rendered
     as cuboids with face shading and architectural edge lines.
     """
-    iw = width * _SUPERSAMPLE
-    ih = height * _SUPERSAMPLE
+    ss = _supersample_for(width, height)
+    iw = width * ss
+    ih = height * ss
 
     bg_rgb = _palette_rgb(palette, genome.bg_color_idx)
     canvas = Image.new("RGBA", (iw, ih), bg_rgb + (255,))
@@ -1404,7 +1444,7 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
     result = _apply_finish(result, 2.5, grain * 0.35, gradient * 0.4)
     result = _apply_cinematic_finish(result, genome)
 
-    if _SUPERSAMPLE > 1:
+    if ss > 1:
         result = result.resize((width, height), Image.LANCZOS)
 
     return result
@@ -1440,10 +1480,11 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
         out_w = square_size
         out_h = int(square_size * 1.5)
 
-    iw = out_w * _SUPERSAMPLE
-    ih = out_h * _SUPERSAMPLE
-    sq_iw = square_size * _SUPERSAMPLE
-    sq_ih = square_size * _SUPERSAMPLE
+    ss = _supersample_for(out_w, out_h)
+    iw = out_w * ss
+    ih = out_h * ss
+    sq_iw = square_size * ss
+    sq_ih = square_size * ss
     off_x = (iw - sq_iw) // 2
     off_y = (ih - sq_ih) // 2
 
@@ -1477,7 +1518,7 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
     else:
         result = _apply_finish(result, 14.0, grain, gradient)
 
-    if _SUPERSAMPLE > 1:
+    if ss > 1:
         result = result.resize((out_w, out_h), Image.LANCZOS)
 
     return result
