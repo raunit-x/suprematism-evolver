@@ -1475,9 +1475,8 @@ async function doExport(orientation) {
   showLoading();
   try {
     const data = await apiFetch('/api/export', { index: idx, orientation });
-    const src = 'data:image/png;base64,' + data.image;
-    modalImg.src = src;
-    modalDownload.href = src;
+    modalImg.src = data.url;
+    modalDownload.href = data.url;
     const suffix = orientation !== 'square' ? `_${orientation}` : '';
     modalDownload.download = `hires_${genNum.textContent.padStart(4, '0')}_${String(idx).padStart(2, '0')}${suffix}.png`;
     modalBackdrop.classList.remove('hidden');
@@ -1491,21 +1490,28 @@ btnExportLand.addEventListener('click', () => doExport('landscape'));
 btnExportPort.addEventListener('click', () => doExport('portrait'));
 
 btnExportAll.addEventListener('click', async () => {
-  showLoading();
+  const label = btnExportAll.textContent;
+  btnExportAll.disabled = true;
   try {
-    const res = await fetch('/api/export_all');
-    if(!res.ok) throw new Error(`Export failed: ${res.status}`);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
+    const { job } = await apiFetch('/api/export_all/start', {}, false);
+    for(;;){
+      await new Promise(r => setTimeout(r, 700));
+      const res = await fetch(`/api/export_all/status/${job}`);
+      const st = await res.json();
+      if(st.status === 'error') throw new Error(st.error);
+      btnExportAll.textContent = `Exporting ${st.done}/${st.total}`;
+      if(st.status === 'done') break;
+    }
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `gen${genNum.textContent.padStart(4, '0')}_all.zip`;
+    a.href = `/api/export_all/download/${job}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+  } catch(e) {
+    alert(e.message);
   } finally {
-    hideLoading();
+    btnExportAll.textContent = label;
+    btnExportAll.disabled = false;
   }
 });
 

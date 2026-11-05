@@ -15,14 +15,17 @@ import base64
 import io
 import json
 import os
+import threading
+import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from src.neat.population import Population
@@ -79,7 +82,8 @@ class AppState:
         self.color_mode: str = "rgb"
         self.pop_size: int = 24
         self.thumb_size: int = 320
-        self.hires_size: int = 2048
+        self.hires_size: int = 4096
+        self.batch_size: int = 2048
         self.mutation_strength: float = 1.0
         self.crossover_rate: float = 0.7
         self.grain_strength: float = 8.0
@@ -340,6 +344,7 @@ class AppState:
     # ---- Export ----
 
     def export_hires(self, index: int, orientation: str = "square") -> str:
+        """Render one individual at full resolution; returns the saved filename."""
         OUTPUT_DIR.mkdir(exist_ok=True)
         gen = self._current_generation()
 
@@ -364,37 +369,57 @@ class AppState:
 
         suffix = f"_{orientation}" if orientation != "square" else ""
         path = OUTPUT_DIR / f"hires_{gen:04d}_{index:02d}{suffix}.png"
-        img.save(path)
-        return _image_to_base64(img)
+        img.save(path, compress_level=1)
+        return path.name
 
-    def export_all_zip(self, resolution: int = 512) -> io.BytesIO:
-        """Render all current individuals and return a zip file in memory."""
-        buf = io.BytesIO()
+    def start_export_all(self) -> str:
+        """Snapshot the population and render it all in a background job."""
         gen = self._current_generation()
+        genomes = [g.copy() for g in self._current_genomes()]
+        shapes = self.engine in ("shapes", "hadid", "maps")
+        palette = self._shape_palette() if shapes else None
+        networks = None if shapes else list(self._networks)
+        cppn_genomes = None if shapes else list(self.pop.genomes)
+        palette_array = None if shapes else get_palette_array(self.palette)
+        color_mode = self.color_mode
+        res = self.batch_size
 
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            genomes = self._current_genomes()
-            for i, genome in enumerate(genomes):
-                if self.engine in ("shapes", "hadid", "maps"):
-                    palette = self._shape_palette()
-                    img = render_genome(genome, resolution, resolution, palette)
-                else:
-                    palette_array = get_palette_array(self.palette)
-                    net = self._networks[i]
-                    g = self.pop.genomes[i]
-                    img = render_to_image(
-                        net, resolution, resolution,
-                        self.color_mode, palette_array,
-                        focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
-                        armature_angle=g.comp_armature_angle,
-                    )
+        job_id = uuid.uuid4().hex[:12]
+        job = {"done": 0, "total": len(genomes), "status": "running",
+               "gen": gen, "path": None, "error": None}
+        _export_jobs[job_id] = job
 
-                img_buf = io.BytesIO()
-                img.save(img_buf, format="PNG")
-                zf.writestr(f"gen{gen:04d}_{i:02d}.png", img_buf.getvalue())
+        def render_one(i):
+            if shapes:
+                img = render_genome(genomes[i], res, res, palette)
+            else:
+                g = cppn_genomes[i]
+                img = render_to_image(
+                    networks[i], res, res, color_mode, palette_array,
+                    focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                    armature_angle=g.comp_armature_angle)
+            b = io.BytesIO()
+            img.save(b, format="PNG", compress_level=1)
+            job["done"] += 1
+            return i, b.getvalue()
 
-        buf.seek(0)
-        return buf
+        def run():
+            try:
+                OUTPUT_DIR.mkdir(exist_ok=True)
+                path = OUTPUT_DIR / f"gen{gen:04d}_all_{job_id}.zip"
+                workers = min(4, os.cpu_count() or 2)
+                with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as zf, \
+                        ThreadPoolExecutor(max_workers=workers) as ex:
+                    for i, data in ex.map(render_one, range(len(genomes))):
+                        zf.writestr(f"gen{gen:04d}_{i:02d}.png", data)
+                job["path"] = path
+                job["status"] = "done"
+            except Exception as e:  # noqa: BLE001
+                job["error"] = str(e)
+                job["status"] = "error"
+
+        threading.Thread(target=run, daemon=True).start()
+        return job_id
 
     # ---- Save ----
 
@@ -412,6 +437,7 @@ class AppState:
 
 
 state = AppState()
+_export_jobs: dict[str, dict] = {}
 
 
 def _image_to_base64(img) -> str:
@@ -481,22 +507,41 @@ def api_export(req: ExportRequest):
     if not (0 <= req.index < len(genomes)):
         return JSONResponse({"error": "Invalid index"}, status_code=400)
     orientation = req.orientation if req.orientation in ("square", "landscape", "portrait") else "square"
-    b64 = state.export_hires(req.index, orientation=orientation)
-    return JSONResponse({"image": b64, "index": req.index, "orientation": orientation})
+    name = state.export_hires(req.index, orientation=orientation)
+    return JSONResponse({"url": f"/api/export_file/{name}", "filename": name,
+                         "index": req.index, "orientation": orientation})
 
 
-@app.get("/api/export_all")
-def api_export_all():
-    genomes = state._current_genomes()
-    if not genomes:
+@app.get("/api/export_file/{name}")
+def api_export_file(name: str):
+    path = OUTPUT_DIR / Path(name).name
+    if not path.is_file() or path.suffix != ".png":
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return FileResponse(path, media_type="image/png", filename=path.name)
+
+
+@app.post("/api/export_all/start")
+def api_export_all_start():
+    if not state._current_genomes():
         return JSONResponse({"error": "No population"}, status_code=400)
-    gen = state._current_generation()
-    buf = state.export_all_zip(resolution=512)
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=gen{gen:04d}_all.zip"},
-    )
+    return JSONResponse({"job": state.start_export_all()})
+
+
+@app.get("/api/export_all/status/{job_id}")
+def api_export_all_status(job_id: str):
+    job = _export_jobs.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
+    return JSONResponse({k: job[k] for k in ("done", "total", "status", "error")})
+
+
+@app.get("/api/export_all/download/{job_id}")
+def api_export_all_download(job_id: str):
+    job = _export_jobs.get(job_id)
+    if job is None or job["status"] != "done":
+        return JSONResponse({"error": "Not ready"}, status_code=404)
+    return FileResponse(job["path"], media_type="application/zip",
+                        filename=f"gen{job['gen']:04d}_all.zip")
 
 
 @app.post("/api/save")
