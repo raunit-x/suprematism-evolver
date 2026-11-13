@@ -80,7 +80,7 @@ class Shape:
     rotation: float
     color_idx: int
     opacity: float = 1.0
-    material: str = "concrete"  # Hadid material family: concrete or marble
+    material: str = "concrete"  # Hadid material: concrete, marble or glass (translucent)
     depth: float = 0.0       # 3D cuboid depth (0 = flat 2D shape)
     elevation: float = 0.0   # Height in 3D stack
     detail: str = "none"     # Architectural detail pattern on face
@@ -110,7 +110,7 @@ class Shape:
     @classmethod
     def from_dict(cls, d: dict) -> Shape:
         material = d.get("material", "concrete")
-        if material not in ("concrete", "marble"):
+        if material not in _MATERIALS:
             material = "concrete"
         return cls(
             kind=d["kind"], x=d["x"], y=d["y"],
@@ -165,6 +165,13 @@ class ShapeGroup:
 # ShapeGenome
 # ------------------------------------------------------------------
 
+def _comp_from_dict(d: dict | None):
+    if not d:
+        return None
+    from src.shapes.composition import CompGenome
+    return CompGenome.from_dict(d)
+
+
 @dataclass
 class ShapeGenome:
     groups: list[ShapeGroup] = field(default_factory=list)
@@ -191,6 +198,9 @@ class ShapeGenome:
     focal_y: float = 0.40             # eye entry point y
     density_falloff: float = 0.5      # complexity attenuation from focal (0=uniform, 1=sharp)
     engine_tag: str = ""              # "hadid", "maps", or "" (shapes/cppn)
+    # Composition genes (src/shapes/composition.CompGenome) for Hadid mode;
+    # when set, the shapes above are an expression of these genes.
+    comp: object = None
 
     def flatten(self) -> list[Shape]:
         """Return all shapes in rendering order (back-to-front)."""
@@ -232,6 +242,7 @@ class ShapeGenome:
             focal_y=self.focal_y,
             density_falloff=self.density_falloff,
             engine_tag=self.engine_tag,
+            comp=self.comp.copy() if self.comp is not None else None,
         )
 
     def to_dict(self) -> dict:
@@ -261,6 +272,8 @@ class ShapeGenome:
             d["perspective_bias"] = self.perspective_bias
         if self.engine_tag:
             d["engine_tag"] = self.engine_tag
+        if self.comp is not None:
+            d["comp"] = self.comp.to_dict()
         return d
 
     @classmethod
@@ -288,7 +301,8 @@ class ShapeGenome:
                        focal_x=d.get("focal_x", 0.38),
                        focal_y=d.get("focal_y", 0.40),
                        density_falloff=d.get("density_falloff", 0.5),
-                       engine_tag=d.get("engine_tag", ""))
+                       engine_tag=d.get("engine_tag", ""),
+                       comp=_comp_from_dict(d.get("comp")))
         # Backward compat: old flat format with "shapes" key
         shapes = [Shape.from_dict(s) for s in d.get("shapes", [])]
         if not shapes:
@@ -404,6 +418,8 @@ def _solidify_architecton(genome: ShapeGenome) -> None:
         # Ensure extrusion is visible and reads as mass.
         s.depth = max(s.depth, 0.022)
 
+
+_MATERIALS = ("concrete", "marble", "glass")
 
 _DETAIL_TYPES = (
     "none", "windows", "checker", "ladder",
@@ -1016,7 +1032,7 @@ def mutate(genome: ShapeGenome, num_palette_colors: int = 16,
     s = _pick_random_shape(genome)
     if s is None:
         return
-    if s.material not in ("concrete", "marble"):
+    if s.material not in _MATERIALS:
         s.material = "concrete"
 
     if random.random() < _rate("perturb_position"):
@@ -1137,11 +1153,16 @@ def mutate(genome: ShapeGenome, num_palette_colors: int = 16,
         if s and random.random() < _rate("perturb_opacity"):
             s.opacity = _clamp(s.opacity + random.gauss(0.10, 0.04), 0.92, 1.0)
         if s and random.random() < _rate("switch_material"):
-            if s.material == "marble":
-                s.material = "concrete" if random.random() < 0.65 else "marble"
+            r = random.random()
+            if s.material == "glass":
+                s.material = "concrete" if r < 0.6 else "glass"
+            elif r < 0.12 and s.w * s.h > 0.004:
+                s.material = "glass"
+            elif s.material == "marble":
+                s.material = "concrete" if r < 0.65 else "marble"
             else:
-                s.material = "marble" if random.random() < 0.30 else "concrete"
-            # Keep both materials fully solid.
+                s.material = "marble" if r < 0.30 else "concrete"
+            # Shapes stay fully opaque; glass translucency is a render effect.
             s.opacity = random.uniform(0.94, 1.0)
 
     # ------ Compositional post-processing ------
@@ -2128,6 +2149,13 @@ def _compose_architecton(genome: ShapeGenome, num_colors: int) -> None:
                 s.detail = random.choice(_QUIET_DETAILS)
             detailed += 1
         else:
+            s.detail = "none"
+
+    # -- 5b) A couple of translucent glass planes among the mid-sized pieces --
+    mids = [s for s in shapes_by_area[n_hero:] if s.w * s.h > 0.004]
+    if mids and random.random() < 0.75:
+        for s in random.sample(mids, min(len(mids), random.randint(1, 2))):
+            s.material = "glass"
             s.detail = "none"
 
     # -- 6) Frame the composition: fill ~84% of the canvas ------------------
