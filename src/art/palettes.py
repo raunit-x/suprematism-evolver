@@ -3,6 +3,8 @@
 Colors stored as (R, G, B) tuples in [0, 1] float range.
 """
 
+from __future__ import annotations
+
 import numpy as np
 
 
