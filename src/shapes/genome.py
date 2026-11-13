@@ -2040,7 +2040,7 @@ def _compose_architecton(genome: ShapeGenome, num_colors: int) -> None:
     n = max(1, num_colors)
 
     # -- 1) Hierarchy: cull the smallest fragments, keep ~14 pieces ---------
-    MAX_PIECES = random.randint(16, 24)
+    MAX_PIECES = random.randint(10, 15)
     allshapes = genome.flatten()
     if len(allshapes) > MAX_PIECES:
         ranked = sorted(allshapes, key=lambda s: s.w * s.h * (1.0 + 4 * s.depth),
@@ -2089,7 +2089,7 @@ def _compose_architecton(genome: ShapeGenome, num_colors: int) -> None:
     second_c = random.choice([c for c in chroma if c != hero_c] or chroma)
     accent_c = 8 if _ok(8) and hero_c != 8 else second_c
 
-    scheme = random.choice(["light", "dark", "chroma"])
+    scheme = random.choices(["light", "dark", "chroma"], weights=[45, 35, 20])[0]
     if scheme == "light":
         bg = random.choice(neutral_light[:2])
     elif scheme == "dark":
@@ -2123,7 +2123,7 @@ def _compose_architecton(genome: ShapeGenome, num_colors: int) -> None:
     # -- 5) Detail restraint: only a few large faces carry pattern ----------
     detailed = 0
     for s in shapes_by_area:
-        if detailed < 3 and s.w * s.h > 0.015 and s.detail != "none":
+        if detailed < 1 and s.w * s.h > 0.03 and s.detail != "none":
             if s.detail not in _QUIET_DETAILS:
                 s.detail = random.choice(_QUIET_DETAILS)
             detailed += 1
@@ -2183,9 +2183,9 @@ def architecton_harmony(genome: ShapeGenome) -> float:
     palette = 1.0 if n_colors <= 6 else max(0.0, 1.0 - (n_colors - 6) * 0.25)
 
     n_detail = sum(1 for s in shapes if s.detail != "none")
-    detail = 1.0 if n_detail <= 3 else max(0.0, 1.0 - (n_detail - 3) * 0.15)
+    detail = 1.0 if n_detail <= 1 else max(0.0, 1.0 - (n_detail - 1) * 0.20)
 
-    count = 1.0 if len(shapes) <= 26 else max(0.0, 1.0 - (len(shapes) - 26) * 0.08)
+    count = 1.0 if len(shapes) <= 16 else max(0.0, 1.0 - (len(shapes) - 16) * 0.08)
 
     return (0.28 * hierarchy + 0.22 * axis_score + 0.18 * fill
             + 0.14 * palette + 0.10 * detail + 0.08 * count)

@@ -13,7 +13,7 @@ import math
 import random as _py_random
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from src.shapes.genome import ShapeGenome, ShapeGroup, Shape
 from src.art.palettes import SUPREMATIST_PALETTE
@@ -478,6 +478,150 @@ def _draw_face_details(draw: ImageDraw.ImageDraw,
                   fill=detail_color, width=blw)
 
 
+# ------------------------------------------------------------------
+# 3D lighting
+# ------------------------------------------------------------------
+
+# Single key light from the upper left (screen space, y down, unit length).
+_LIGHT_DIR = (-0.55, -0.835)
+_PLASTER_WHITE = (238, 233, 222)
+_SHADOW_RGB = (14, 14, 24)
+
+
+def _mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    return tuple(int(round(x + (y - x) * t)) for x, y in zip(a, b))
+
+
+def _face_shade(base: tuple[int, int, int], nx: float, ny: float) -> tuple[int, int, int]:
+    """Lambert-style shade for a side face with 2D outward normal (nx, ny).
+
+    The front face (facing the viewer) keeps the base colour; side faces
+    turned toward the light get lighter, those turned away fall into a
+    cool, desaturated shade.
+    """
+    n = math.hypot(nx, ny) or 1.0
+    d = (nx * _LIGHT_DIR[0] + ny * _LIGHT_DIR[1]) / n
+    if d >= 0:
+        return _lighten(base, 0.06 + 0.24 * d)
+    shade = _darken(base, 0.22 + 0.30 * (-d))
+    return _mix(shade, _SHADOW_RGB, 0.10 + 0.10 * (-d))
+
+
+def _shadow_offset(scale: float, depth: float) -> tuple[int, int]:
+    mag = scale * (0.012 + 0.35 * depth)
+    return (int(round(-_LIGHT_DIR[0] * mag)), int(round(-_LIGHT_DIR[1] * mag)))
+
+
+def _cast_shadow_onto(stack: Image.Image, layer: Image.Image,
+                      depth: float, strength: float = 0.42) -> None:
+    """Darken parts of ``stack`` (already-drawn, lower forms) that ``layer``
+    would shade from the key light.  Hard-ish shadow with a small penumbra,
+    computed only inside the layer's bbox."""
+    bbox = layer.getbbox()
+    if bbox is None:
+        return
+    W, H = stack.size
+    scale = min(W, H)
+    dx, dy = _shadow_offset(scale, depth)
+    blur = max(1.0, math.hypot(dx, dy) * 0.18)
+    pad = int(blur * 3) + 2
+    x0 = max(0, min(bbox[0], bbox[0] + dx) - pad)
+    y0 = max(0, min(bbox[1], bbox[1] + dy) - pad)
+    x1 = min(W, max(bbox[2], bbox[2] + dx) + pad)
+    y1 = min(H, max(bbox[3], bbox[3] + dy) + pad)
+    if x1 <= x0 or y1 <= y0:
+        return
+    src = layer.getchannel("A").crop((x0 - dx, y0 - dy, x1 - dx, y1 - dy))
+    src = src.filter(ImageFilter.GaussianBlur(blur))
+    receiver = stack.getchannel("A").crop((x0, y0, x1, y1))
+    mask = ImageChops.multiply(src, receiver).point(lambda v: int(v * strength))
+    shade = Image.new("RGBA", mask.size, _SHADOW_RGB + (0,))
+    shade.putalpha(mask)
+    region = stack.crop((x0, y0, x1, y1))
+    a = region.getchannel("A")
+    region.alpha_composite(shade)
+    region.putalpha(a)
+    stack.paste(region, (x0, y0))
+
+
+def _noise_image(size: tuple[int, int], cells: int, octaves: int = 3,
+                 amp: float = 1.0, rng: np.random.Generator | None = None) -> Image.Image:
+    """Smooth multi-octave value noise as an 'L' image centred on 128.
+
+    Built from tiny random grids upscaled by PIL, so it's cheap at any size.
+    """
+    rng = rng or np.random.default_rng()
+    w, h = size
+    acc = np.zeros((256, 256), dtype=np.float32)
+    total = 0.0
+    for o in range(octaves):
+        n = max(2, cells * (2 ** o))
+        small = rng.standard_normal((n, n)).astype(np.float32)
+        img = Image.fromarray(((small + 4) / 8 * 255).clip(0, 255).astype(np.uint8), "L")
+        up = np.asarray(img.resize((256, 256), Image.BICUBIC), dtype=np.float32) / 255.0 - 0.5
+        wgt = 0.5 ** o
+        acc += up * wgt
+        total += wgt
+    acc = acc / total * 2.0 * amp
+    out = Image.fromarray((128 + acc * 127).clip(0, 255).astype(np.uint8), "L")
+    return out.resize((w, h), Image.BICUBIC)
+
+
+def _apply_plaster(stack: Image.Image) -> Image.Image:
+    """Matte plaster surface: soft tonal mottling + a gentle light falloff
+    across the structure, applied only to the opaque forms."""
+    bbox = stack.getbbox()
+    if bbox is None:
+        return stack
+    region = stack.crop(bbox)
+    w, h = region.size
+    a = region.getchannel("A")
+    rgb = region.convert("RGB")
+    mottle = _noise_image((w, h), cells=6, octaves=4, amp=0.22)
+    # Light falloff: brighter toward the key light, ~±6%.
+    xs = np.linspace(-1, 1, 64, dtype=np.float32)
+    gx, gy = np.meshgrid(xs, xs)
+    fall = -(gx * _LIGHT_DIR[0] + gy * _LIGHT_DIR[1]) / 1.4142
+    fall_img = Image.fromarray((128 - fall * 30).clip(0, 255).astype(np.uint8), "L")
+    fall_img = fall_img.resize((w, h), Image.BILINEAR)
+    tone = ImageChops.add(mottle, fall_img, scale=1.0, offset=-128)
+    tone_rgb = Image.merge("RGB", (tone, tone, tone))
+    rgb = ImageChops.soft_light(rgb, tone_rgb)
+    rgb.putalpha(a)
+    out = stack.copy()
+    out.paste(rgb, bbox[:2])
+    return out
+
+
+def _build_stack_3d(genome: ShapeGenome, iw: int, ih: int,
+                    palette: list[tuple]) -> Image.Image:
+    """Render all cuboids back-to-front with inter-object shadows."""
+    shapes = genome.flatten()
+    shapes.sort(key=lambda s: s.elevation)
+    stack = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
+    for shape in shapes:
+        layer = _render_cuboid_layer(shape, iw, ih, palette, genome)
+        if stack.getbbox() is not None:
+            _cast_shadow_onto(stack, layer, shape.depth)
+        _composite_layer(stack, layer)
+    return _apply_plaster(stack)
+
+
+def _soften_background(canvas: Image.Image, bg_rgb: tuple[int, int, int]) -> None:
+    """Calm the geometric background fields: pull them back toward the base
+    colour and add a broad pool of light from the key-light side."""
+    w, h = canvas.size
+    base = Image.new("RGBA", (w, h), bg_rgb + (255,))
+    calmed = Image.blend(base, canvas, 0.62)
+    xs = np.linspace(-1, 1, 64, dtype=np.float32)
+    gx, gy = np.meshgrid(xs, xs)
+    d = np.sqrt((gx - _LIGHT_DIR[0] * 0.6) ** 2 + (gy - _LIGHT_DIR[1] * 0.6) ** 2)
+    pool = Image.fromarray((150 - np.clip(d / 2.2, 0, 1) * 55).astype(np.uint8), "L")
+    pool = pool.resize((w, h), Image.BILINEAR)
+    rgb = ImageChops.soft_light(calmed.convert("RGB"), Image.merge("RGB", (pool, pool, pool)))
+    canvas.paste(rgb.convert("RGBA"), (0, 0))
+
+
 def _render_cuboid_layer(shape: Shape, width: int, height: int,
                           palette: list[tuple],
                           genome: ShapeGenome) -> Image.Image:
@@ -490,28 +634,17 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     # ImageDraw writes RGBA pixels verbatim (no blending), so any alpha < 255
     # fill punches a hole through the face and reads as a hollow wire frame.
     # Architectons are painted solids: always fully opaque.
-    is_solid = True
     alpha = 255
     material = shape.material if shape.material in ("concrete", "marble") else "concrete"
 
+    # Plaster / stone: palette colour pulled slightly toward warm white so
+    # volumes read as painted plaster rather than glossy plastic.
     if material == "marble":
-        base = _lighten(rgb, 0.16)
-        front_color = base + (alpha,)
-        top_color = _lighten(base, 0.22) + (alpha,)
-        side_color = _darken(base, 0.15) + (alpha,)
-        edge_color = _darken(base, 0.40) + (min(255, alpha + 18),)
-        highlight_edge = _lighten(base, 0.62) + (min(255, alpha + 24),)
-        shadow_edge = _darken(base, 0.52) + (min(255, alpha + 18),)
-        seam_color = _darken(base, 0.32) + (max(75, int(alpha * 0.68)),)
+        base = _mix(rgb, _PLASTER_WHITE, 0.14)
     else:
-        base = _darken(_lighten(rgb, 0.05), 0.08)
-        front_color = base + (alpha,)
-        top_color = _lighten(base, 0.30) + (alpha,)
-        side_color = _darken(base, 0.36) + (alpha,)
-        edge_color = _darken(base, 0.52) + (min(255, alpha + 20),)
-        highlight_edge = _lighten(base, 0.36) + (min(255, alpha + 20),)
-        shadow_edge = _darken(base, 0.64) + (min(255, alpha + 18),)
-        seam_color = _darken(base, 0.48) + (max(84, int(alpha * 0.74)),)
+        base = _mix(rgb, _PLASTER_WHITE, 0.06)
+    front_color = base + (alpha,)
+    ridge_color = _lighten(base, 0.30) + (alpha,)
 
     # Projection vectors (pixels per unit)
     scale = min(width, height)
@@ -588,17 +721,6 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
         return [tuple(map(int, p)) for p in pts]
 
     if shape.depth > 0.002:
-        # Soft projected shadow to ground the forms and reduce toy-block look.
-        shadow_poly = [
-            (x + depth_dx * 1.3 - elev_dx * 0.2, y + depth_dy * 1.3 - elev_dy * 0.2)
-            for x, y in front
-        ]
-        if is_solid:
-            shadow_alpha = 52 if material == "marble" else 62
-        else:
-            shadow_alpha = int(22 + alpha * 0.10) if material == "marble" else int(32 + alpha * 0.13)
-        draw.polygon(_ipoly(shadow_poly), fill=(0, 0, 0, shadow_alpha))
-
         n_pts = len(front)
         faces_to_draw = []
         for i in range(n_pts):
@@ -617,13 +739,7 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
             if dot > 1e-4:
                 face = [p1, p2, back[(i + 1) % n_pts], back[i]]
                 
-                # Shading based on normal direction
-                # ny < 0 means pointing UP.
-                if abs(ny) > abs(nx):
-                    fc = top_color
-                else:
-                    fc = side_color
-                    
+                fc = _face_shade(base, nx, ny) + (alpha,)
                 faces_to_draw.append((face, fc))
         
         # Sort faces by depth (furthest along extrusion vector drawn first)
@@ -633,12 +749,9 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
         ), reverse=True)
 
         for face, fc in faces_to_draw:
-            pts = _ipoly(face)
-            draw.polygon(pts, fill=fc)
-            # Architectural edge lines
-            for i in range(len(pts)):
-                draw.line([pts[i], pts[(i + 1) % len(pts)]],
-                          fill=edge_color, width=2)
+            # Outline in the face's own colour: closes AA seams between
+            # adjacent faces without drawing cartoon contour lines.
+            draw.polygon(_ipoly(face), fill=fc, outline=fc)
 
     # Front face (always visible, drawn last)
     front_pts = _ipoly(front)
@@ -646,27 +759,23 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
 
     # Architectural detail patterns on front face
     if shape.detail != "none":
-        det_dark = _darken(front_color[:3], 0.55) + (min(255, alpha),)
-        det_light = _lighten(front_color[:3], 0.30) + (min(255, alpha),)
+        # Incised, low-contrast panelling rather than black "vents".
+        det_dark = _darken(front_color[:3], 0.16) + (alpha,)
+        det_light = _lighten(front_color[:3], 0.10) + (alpha,)
         _draw_face_details(draw, front, shape, det_dark, det_light, width, height)
 
     if shape.depth > 0.002:
-        # Directional edge tinting simulates bevel highlights/shadows.
-        light_dir = (-0.68, -0.74)
+        # Thin light-catching arris only on edges that face the light; the
+        # dark side is defined by face shading alone (no dark outlines).
+        lw = max(1, int(round(min(width, height) / 900)))
         for i in range(len(front)):
             p1 = front[i]
             p2 = front[(i + 1) % len(front)]
-            ex = p2[0] - p1[0]
-            ey = p2[1] - p1[1]
-            nx = ey
-            ny = -ex
-            dot = nx * light_dir[0] + ny * light_dir[1]
-            ec = highlight_edge if dot > 0 else shadow_edge
-            draw.line(
-                [tuple(map(int, p1)), tuple(map(int, p2))],
-                fill=ec,
-                width=2,
-            )
+            nx = p2[1] - p1[1]
+            ny = -(p2[0] - p1[0])
+            if nx * _LIGHT_DIR[0] + ny * _LIGHT_DIR[1] > 0:
+                draw.line([tuple(map(int, p1)), tuple(map(int, p2))],
+                          fill=ridge_color, width=lw)
 
     return layer
 
@@ -1045,7 +1154,20 @@ def _apply_shape_texture(layer: Image.Image, strength: float = 12.0) -> Image.Im
     ).astype(np.float32) / 255.0
     matte = (lo_up - 0.5) * strength * 0.6
 
-    combined = fibers + matte
+    # Directional brush drag along the shape's long axis (the region is
+    # rotated with the shape afterwards, so strokes follow its orientation).
+    if w >= h:
+        sh, sw = max(2, h // 3), max(2, w // 48)
+    else:
+        sh, sw = max(2, h // 48), max(2, w // 3)
+    streak = rng.standard_normal((sh, sw), dtype=np.float32)
+    streak_up = np.array(
+        Image.fromarray(((streak + 3) / 6 * 255).clip(0, 255).astype(np.uint8), "L")
+        .resize((w, h), Image.BICUBIC)
+    ).astype(np.float32) / 255.0
+    brush = (streak_up - 0.5) * strength * 0.55
+
+    combined = fibers + matte + brush
 
     for c in range(3):
         ch = arr[:, :, c].astype(np.float32)
@@ -1351,6 +1473,41 @@ def _apply_finish(image: Image.Image, texture: float, grain: float,
     return Image.fromarray(out, image.mode)
 
 
+_PAPER_WARM = (232, 214, 182)
+
+
+def _apply_paper_age(image: Image.Image) -> Image.Image:
+    """Make a 2D composition read as gouache on an old sheet.
+
+    Applied at output resolution (cheap): pigments eased ~8% toward a warm,
+    slightly desaturated period tone, soft multi-scale mottling of the
+    ground, and gentle warm toning that creeps in from the sheet's edges.
+    """
+    w, h = image.size
+    rgb = image.convert("RGB")
+
+    # Period pigments: slight desaturation + warm cast.
+    grey = rgb.convert("L").convert("RGB")
+    rgb = Image.blend(rgb, grey, 0.08)
+    warm = Image.new("RGB", (w, h), _PAPER_WARM)
+    rgb = ImageChops.multiply(rgb, Image.blend(Image.new("RGB", (w, h), (255, 255, 255)), warm, 0.10))
+
+    # Mottled ground (large soft blotches + finer tooth).
+    mottle = _noise_image((w, h), cells=5, octaves=5, amp=0.16)
+    rgb = ImageChops.soft_light(rgb, Image.merge("RGB", (mottle, mottle, mottle)))
+
+    # Edge toning: warm darkening toward the border, irregular via noise.
+    xs = np.linspace(-1, 1, 128, dtype=np.float32)
+    gx, gy = np.meshgrid(xs, xs)
+    edge = np.clip((np.maximum(np.abs(gx), np.abs(gy)) - 0.84) / 0.16, 0, 1) ** 2.0
+    edge_img = Image.fromarray((edge * 255).astype(np.uint8), "L").resize((w, h), Image.BILINEAR)
+    edge_noise = _noise_image((w, h), cells=7, octaves=3, amp=0.9)
+    edge_img = ImageChops.multiply(edge_img, edge_noise)
+    toned = ImageChops.multiply(rgb, Image.new("RGB", (w, h), (214, 190, 150)))
+    rgb = Image.composite(toned, rgb, edge_img.point(lambda v: int(v * 0.40)))
+    return rgb
+
+
 # Render settings (module-level defaults, updated by server)
 GRAIN_STRENGTH: float = 8.0
 GRADIENT_STRENGTH: float = 10.0
@@ -1387,23 +1544,34 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
     if ss > 1:
         result = result.resize((width, height), Image.LANCZOS)
 
-    return result
+    return _apply_paper_age(result)
 
 
 def _cast_ground_shadow(stack: Image.Image) -> Image.Image:
-    """Soft drop shadow of the whole structure, lit from the upper left.
+    """Directional ground shadow cast by the whole structure.
 
-    Grounds the architecton so it stops floating on the background field.
+    A fairly crisp core thrown away from the key light plus a tight, soft
+    contact shadow hugging the silhouette, so the architecton sits on the
+    ground plane instead of floating on a blurred halo.
     """
     w, h = stack.size
+    scale = min(w, h)
     alpha = stack.getchannel("A")
-    off = (int(w * 0.028), int(h * 0.042))
-    shifted = Image.new("L", (w, h), 0)
-    shifted.paste(alpha, off)
-    shifted = shifted.filter(ImageFilter.GaussianBlur(radius=max(2.0, w * 0.012)))
-    shifted = shifted.point(lambda v: int(v * 0.32))
-    shadow = Image.new("RGBA", (w, h), (8, 8, 16, 0))
-    shadow.putalpha(shifted)
+    out = Image.new("L", (w, h), 0)
+
+    mag = scale * 0.05
+    dx = int(round(-_LIGHT_DIR[0] * mag))
+    dy = int(round(-_LIGHT_DIR[1] * mag))
+    core = Image.new("L", (w, h), 0)
+    core.paste(alpha, (dx, dy))
+    core = core.filter(ImageFilter.GaussianBlur(radius=max(1.5, scale * 0.006)))
+    out = ImageChops.lighter(out, core.point(lambda v: int(v * 0.30)))
+
+    contact = alpha.filter(ImageFilter.GaussianBlur(radius=max(2.0, scale * 0.012)))
+    out = ImageChops.lighter(out, contact.point(lambda v: int(v * 0.22)))
+
+    shadow = Image.new("RGBA", (w, h), _SHADOW_RGB + (0,))
+    shadow.putalpha(out)
     return shadow
 
 
@@ -1422,18 +1590,10 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
     bg_rgb = _palette_rgb(palette, genome.bg_color_idx)
     canvas = Image.new("RGBA", (iw, ih), bg_rgb + (255,))
 
-    # Dramatic diagonal background fields
     _render_background_fields(canvas, genome, palette)
+    _soften_background(canvas, bg_rgb)
 
-    # Collect all shapes and sort by elevation (ascending = back to front)
-    all_shapes = genome.flatten()
-    all_shapes.sort(key=lambda s: s.elevation)
-
-    stack = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
-    for shape in all_shapes:
-        _composite_layer(stack, _render_cuboid_layer(
-            shape, iw, ih, palette, genome,
-        ))
+    stack = _build_stack_3d(genome, iw, ih, palette)
     canvas.alpha_composite(_cast_ground_shadow(stack))
     canvas.alpha_composite(stack)
 
@@ -1495,17 +1655,14 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
 
     if is_3d:
         _render_background_fields(canvas, genome, palette)
+        _soften_background(canvas, bg_rgb)
 
-    shapes_layer = Image.new("RGBA", (sq_iw, sq_ih), (0, 0, 0, 0))
-    all_shapes = genome.flatten()
     if is_3d:
-        all_shapes.sort(key=lambda s: s.elevation)
-        for shape in all_shapes:
-            _composite_layer(shapes_layer, _render_cuboid_layer(
-                shape, sq_iw, sq_ih, palette, genome))
+        shapes_layer = _build_stack_3d(genome, sq_iw, sq_ih, palette)
         canvas.alpha_composite(_cast_ground_shadow(shapes_layer), (off_x, off_y))
     else:
-        for shape in all_shapes:
+        shapes_layer = Image.new("RGBA", (sq_iw, sq_ih), (0, 0, 0, 0))
+        for shape in genome.flatten():
             _composite_shape(shapes_layer, shape, palette)
 
     canvas.paste(shapes_layer, (off_x, off_y), shapes_layer)
@@ -1521,7 +1678,7 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
     if ss > 1:
         result = result.resize((out_w, out_h), Image.LANCZOS)
 
-    return result
+    return result if is_3d else _apply_paper_age(result)
 
 
 def render_population_grid(genomes: list[ShapeGenome], thumb_size: int = 128,
