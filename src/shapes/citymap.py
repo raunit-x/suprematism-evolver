@@ -1231,6 +1231,212 @@ def _vary(c: tuple[int, int, int], rng: random.Random, amt: float) -> tuple[int,
     return tuple(int(_clamp(x * f + w * k, 0, 255)) for x, k in zip(c, (0.6, 0.3, -0.4)))
 
 
+# ----------------------------------------------------------------------
+# Siting landmarks: complexes and plazas belong to the plan.  They never
+# straddle water, avenues, railways, district cuts or the radial rings and
+# rays, and they turn with the street grid of the district they stand in.
+# ----------------------------------------------------------------------
+
+_SITE_DOM = (-0.25, -0.25, 1.25, 1.25)   # fixed, so every output size sites alike
+_SITE_RES = 240                          # mask pixels per unit
+
+
+def _district_angles(g: CityGenome) -> list[tuple[Poly, float, float, float]]:
+    """Each district with its street-grid direction (radians) and centroid;
+    the angle mirrors the one ``express_city`` gives that district's lots."""
+    dom = (-DOMAIN_PAD, -DOMAIN_PAD, 1 + DOMAIN_PAD, 1 + DOMAIN_PAD)
+    base = math.radians(g.base_angle)
+    spread = math.radians(g.angle_spread)
+    out = []
+    for d_i, (district, hint) in enumerate(_districts(g, dom)):
+        cx = sum(p[0] for p in district) / len(district)
+        cy = sum(p[1] for p in district) / len(district)
+        drng = random.Random(g.seed * 31 + d_i)
+        if hint is not None:
+            ang = hint + drng.gauss(0, 0.02)
+        else:
+            ang = base + drng.choice([0, 0, 0, math.pi / 2, spread, -spread]) + drng.gauss(0, 0.03)
+        for z in g.zones:
+            if z["kind"] == "turn" and (math.hypot(cx - z["x"], cy - z["y"]) < z["r"]
+                                        or _inside(district, z["x"], z["y"])):
+                ang += math.radians(z.get("angle", 45.0))
+        out.append((district, ang, cx, cy))
+    return out
+
+
+def _angle_at(districts, x: float, y: float, default: float) -> float:
+    best, best_d = default, float("inf")
+    for poly, ang, cx, cy in districts:
+        d = (cx - x) ** 2 + (cy - y) ** 2
+        if d < best_d:
+            if _inside(poly, x, y):
+                return ang
+            best, best_d = ang, d
+    return best
+
+
+class _SiteMask:
+    """Coarse raster of where landmarks may not go."""
+
+    def __init__(self):
+        x0, y0, x1, y1 = _SITE_DOM
+        self.w = int((x1 - x0) * _SITE_RES)
+        self.h = int((y1 - y0) * _SITE_RES)
+        self.img = Image.new("L", (self.w, self.h), 0)
+        self.draw = ImageDraw.Draw(self.img)
+        self._arr = None
+
+    def px(self, p):
+        return ((p[0] - _SITE_DOM[0]) * _SITE_RES, (p[1] - _SITE_DOM[1]) * _SITE_RES)
+
+    def line(self, pts, width_u):
+        self.draw.line([self.px(p) for p in pts], fill=255,
+                       width=max(1, int(math.ceil(width_u * _SITE_RES))), joint="curve")
+        self._arr = None
+
+    def polygon(self, pts):
+        self.draw.polygon([self.px(p) for p in pts], fill=255)
+        self._arr = None
+
+    def ellipse(self, c, r, width_u=None):
+        x, y = self.px(c)
+        q = r * _SITE_RES
+        box = [x - q, y - q, x + q, y + q]
+        if width_u is None:
+            self.draw.ellipse(box, fill=255)
+        else:
+            self.draw.ellipse(box, outline=255, width=max(1, int(math.ceil(width_u * _SITE_RES))))
+        self._arr = None
+
+    def free(self, pts) -> bool:
+        if self._arr is None:
+            self._arr = np.asarray(self.img) > 0
+        xs = [self.px(p) for p in pts]
+        bx0 = max(0, int(min(x for x, _ in xs)) - 1)
+        by0 = max(0, int(min(y for _, y in xs)) - 1)
+        bx1 = min(self.w, int(max(x for x, _ in xs)) + 2)
+        by1 = min(self.h, int(max(y for _, y in xs)) + 2)
+        if bx1 <= bx0 or by1 <= by0:
+            return False
+        fp = Image.new("L", (bx1 - bx0, by1 - by0), 0)
+        ImageDraw.Draw(fp).polygon([(x - bx0, y - by0) for x, y in xs], fill=255)
+        return not (self._arr[by0:by1, bx0:bx1] & (np.asarray(fp) > 0)).any()
+
+
+def _footprint(x, y, hw, hh, ang, round_: bool) -> Poly:
+    t, n = (math.cos(ang), math.sin(ang)), (-math.sin(ang), math.cos(ang))
+    if round_:
+        return [(x + t[0] * hw * math.cos(a) + n[0] * hh * math.sin(a),
+                 y + t[1] * hw * math.cos(a) + n[1] * hh * math.sin(a))
+                for a in (2 * math.pi * k / 28 for k in range(28))]
+    return [(x + t[0] * su * hw + n[0] * sv * hh, y + t[1] * su * hw + n[1] * sv * hh)
+            for su, sv in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+
+
+def _site_landmarks(g: CityGenome, street: float) -> tuple[list[dict], list[dict]]:
+    """Where complexes and plazas actually stand: the nearest spot to their
+    gene position that is clear of the city's lines and water, turned to the
+    local street grid.  A landmark with no room is left out."""
+    if not g.complexes and not g.plazas:
+        return [], []
+    m = _SiteMask()
+    districts = _district_angles(g)
+    base = math.radians(g.base_angle)
+    gap = street * 1.5                                   # breathing room
+
+    for w in g.waters:
+        kind = w.get("kind", "river")
+        if kind == "lake":
+            lobes = w["lobes"]
+            ctrl = [(w["x"] + w["r"] * l * math.cos(2 * math.pi * k / len(lobes)),
+                     w["y"] + w["r"] * l * math.sin(2 * math.pi * k / len(lobes)))
+                    for k, l in enumerate(lobes)]
+            shore = _catmull(ctrl, 16, closed=True)
+            m.polygon(shore)
+            m.line(shore + shore[:1], 2 * gap)
+        elif kind == "coast":
+            curve = _catmull(w["pts"], 40)
+            sgn = w.get("side", 1)
+            far = [(p[0] + n[0] * sgn * 3, p[1] + n[1] * sgn * 3) for p, _, n in _frames(curve)]
+            m.polygon(curve + far[::-1])
+            m.line(curve, 2 * gap + 0.08)                  # piers reach out ~0.08
+        else:
+            m.line(_catmull(w["pts"], 40), w["width"] * 1.15 + street * 4 + 2 * gap)
+    for av in g.avenues:
+        m.line(_catmull(av["pts"], 30), av["width"] + 2 * gap)
+    for rl in g.rails:
+        m.line(_catmull(rl["pts"], 40), street * 2.6 + 2 * gap)
+    for cut in g.cuts:
+        a = math.radians(cut["angle"])
+        d = (math.cos(a) * cut["length"] / 2, math.sin(a) * cut["length"] / 2)
+        m.line([(cut["x"] - d[0], cut["y"] - d[1]), (cut["x"] + d[0], cut["y"] + d[1])],
+               cut["width"] + 2 * gap)
+    if g.plan == "radial" and g.hub:
+        h = g.hub
+        radii = _ring_radii(h, _SITE_DOM)
+        hub_c = (h["x"], h["y"])
+        m.ellipse(hub_c, radii[0] + gap)
+        for r in radii[1::max(1, len(radii) // 4)]:
+            m.ellipse(hub_c, r, street * 1.8 + 2 * gap)
+        for i in range(int(h["rays"])):
+            a = math.radians(h["rot"]) + 2 * math.pi * i / int(h["rays"])
+            m.line([(h["x"] + radii[0] * math.cos(a), h["y"] + radii[0] * math.sin(a)),
+                    (h["x"] + radii[-1] * math.cos(a), h["y"] + radii[-1] * math.sin(a))],
+                   street * 2.2 + 2 * gap)
+
+    def site(x, y, hw, hh, turn, round_, seed):
+        """First clear spot, spiralling out from (x, y) and shrinking if need be."""
+        rng = random.Random(seed)
+        offs = [(0.0, 0.0)]
+        for ring in range(1, 11):
+            r = ring * 0.025
+            k = 8 + ring * 2
+            a0 = rng.uniform(0, 2 * math.pi)
+            offs += [(r * math.cos(a0 + 2 * math.pi * j / k), r * math.sin(a0 + 2 * math.pi * j / k))
+                     for j in range(k)]
+        for scale in (1.0, 0.85, 0.7, 0.55):
+            for dx, dy in offs:
+                cx, cy = _clamp(x + dx, 0.06, 0.94), _clamp(y + dy, 0.06, 0.94)
+                ang = _angle_at(districts, cx, cy, base) + turn
+                fp = _footprint(cx, cy, hw * scale, hh * scale, ang, round_)
+                if m.free(fp):
+                    return cx, cy, scale, ang, fp
+        return None
+
+    placed_c: list[dict] = []
+    for c in g.complexes:
+        kind = c.get("kind", "courtyard")
+        W, H = c["w"] * 0.5, c["h"] * 0.5
+        if kind in ("circus", "planetarium"):
+            W = H = max(W, H)
+        elif kind == "gasworks":
+            H = W
+        round_ = kind in ("circus", "planetarium")
+        # The gene angle only says "along" or "across" the local grid.
+        turn = math.pi / 2 if round((c.get("angle", 0.0) % 180) / 90) % 2 else 0.0
+        s = site(c["x"], c["y"], W + street, H + street, turn, round_, c.get("seed", 0))
+        if s is None:
+            continue
+        cx, cy, scale, ang, fp = s
+        placed_c.append({**c, "x": cx, "y": cy, "w": c["w"] * scale, "h": c["h"] * scale,
+                         "angle": math.degrees(ang)})
+        m.polygon(fp)
+        m.line(fp + fp[:1], 2 * gap)
+
+    placed_p: list[dict] = []
+    for i, pz in enumerate(g.plazas):
+        sq = pz.get("shape") == "square"
+        R = pz["r"] + street
+        s = site(pz["x"], pz["y"], R, R, 0.0, not sq, i * 7919 + int(pz["r"] * 1e4))
+        if s is None:
+            continue
+        cx, cy, scale, ang, fp = s
+        placed_p.append({**pz, "x": cx, "y": cy, "r": pz["r"] * scale, "angle": math.degrees(ang)})
+        m.polygon(fp)
+        m.line(fp + fp[:1], 2 * gap)
+    return placed_c, placed_p
+
+
 def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
                 grain: float = 8.0) -> Image.Image:
     """Paint the map.  The unit square maps to the centred square of the
@@ -1369,8 +1575,10 @@ def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
     for av in g.avenues:
         stroke(_catmull(av["pts"], 30), av["width"], ground)
 
-    # 3b. Large complexes, each with its own internal structure.
-    for cx in g.complexes:
+    # 3b. Large complexes, each with its own internal structure, sited
+    # clear of water, avenues, railways and ring roads, on the local grid.
+    sited_complexes, sited_plazas = _site_landmarks(g, street)
+    for cx in sited_complexes:
         _draw_complex(cx, g, col, poly, stroke, bar, ground, water, dark_on, street, side)
 
     # 4. Water, with islands, piers and bridges.
@@ -1463,11 +1671,11 @@ def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
                             deck * 0.9, deck * 2.0, bridge_col)
 
     # 5. Plazas.
-    for pz in g.plazas:
+    for pz in sited_plazas:
         c, r = (pz["x"], pz["y"]), pz["r"]
         fill = pz.get("fill", "void")
         if pz.get("shape") == "square":
-            a = math.radians(g.base_angle)
+            a = math.radians(pz.get("angle", g.base_angle))
             t, n = (math.cos(a), math.sin(a)), (-math.sin(a), math.cos(a))
             bar(c, t, n, 2 * (r + street), 2 * (r + street), ground)
             if fill in ("lead", "black"):
