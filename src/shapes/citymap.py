@@ -1403,10 +1403,51 @@ def _site_landmarks(g: CityGenome, street: float) -> tuple[list[dict], list[dict
                     return cx, cy, scale, ang, fp
         return None
 
+    rail_frames = [_frames(_catmull(rl["pts"], 40)) for rl in g.rails]
+
+    def site_by_rail(c, W, H):
+        """A railyard lies alongside a railway, long side on the line, the
+        nearest stretch to its gene position first."""
+        cands = []
+        for frames in rail_frames:
+            for i in range(2, len(frames) - 2):
+                p, t, n = frames[i]
+                if 0.08 < p[0] < 0.92 and 0.08 < p[1] < 0.92:
+                    cands.append((math.hypot(p[0] - c["x"], p[1] - c["y"]), p, t, n))
+        cands.sort(key=lambda e: e[0])
+        sides = (1, -1) if c.get("seed", 0) % 2 else (-1, 1)
+        for scale in (1.0, 0.85, 0.7, 0.55):
+            hw, hh = (W + street) * scale, (H + street) * scale
+            off = hh + street * 1.3 + gap + 0.004
+            for _, p, t, n in cands:
+                for sd in sides:
+                    cx, cy = p[0] + n[0] * sd * off, p[1] + n[1] * sd * off
+                    ang = math.atan2(t[1], t[0])
+                    fp = _footprint(cx, cy, hw, hh, ang, False)
+                    if m.free(fp):
+                        # rail_v: where the line runs, in the yard's own frame.
+                        return cx, cy, scale, ang, fp, -sd * off
+        return None
+
     placed_c: list[dict] = []
     for c in g.complexes:
         kind = c.get("kind", "courtyard")
+        if kind == "railyard" and not g.rails:
+            # No railway to serve: build something else on the site.
+            kind = ("courtyard", "factory", "institute")[c.get("seed", 0) % 3]
+            c = {**c, "kind": kind}
         W, H = c["w"] * 0.5, c["h"] * 0.5
+        if kind == "railyard":
+            H = min(H, W * 0.45)                           # yards are long and narrow
+            s = site_by_rail(c, W, H)
+            if s is None:
+                continue
+            cx, cy, scale, ang, fp, rail_v = s
+            placed_c.append({**c, "x": cx, "y": cy, "w": 2 * W * scale, "h": 2 * H * scale,
+                             "angle": math.degrees(ang), "rail_v": rail_v})
+            m.polygon(fp)
+            m.line(fp + fp[:1], 2 * gap)
+            continue
         if kind in ("circus", "planetarium"):
             W = H = max(W, H)
         elif kind == "gasworks":
@@ -1992,37 +2033,59 @@ def _draw_complex(c: dict, g: CityGenome, col, poly, stroke, bar, ground, water,
                 line((du, -r * 0.2), (-W + 2 * W * k / 4, H), thin * 0.7, col(dark))
 
     elif kind == "railyard":
-        ntr = rng.randint(6, 14)
-        gap = 2 * H / ntr
-        fan = -W + W * rng.uniform(0.3, 0.6)
+        # Sidings running the length of the site, gathered at both ends by a
+        # short throat into a lead track that joins the railway alongside.
         tc = col(dark)
         A = pick(dark)
-        for i in range(ntr):
-            v = -H + gap * (i + 0.5)
-            line((-W, 0), (fan, v), thin, tc)
-            line((fan, v), (W, v), thin, tc)
-            if i < ntr - 1 and rng.random() < 0.3:          # a long shed
-                u0 = rng.uniform(fan, W * 0.5)
-                rect(u0, min(W, u0 + W * rng.uniform(0.3, 0.9)),
-                     v + gap * 0.22, v + gap * 0.78, col(A if rng.random() < 0.7 else pick()))
-        if elab >= 2:                                       # platforms
-            for i in range(0, ntr - 1, 3):
-                v = -H + gap * (i + 1)
-                rect(fan + W * 0.1, W * 0.8, v - gap * 0.12, v + gap * 0.12, col(g.lead))
-        # Roundhouse: a turntable with stalls fanned around it.
-        if rng.random() < 0.6 or elab >= 1:
-            r = min(W, H) * 0.22
-            ru, rv = W - r * 1.9, -H + r * 1.9
-            k = rng.randint(7, 12)
+        rail_v = c.get("rail_v")
+        lead_v = (H if rail_v is not None and rail_v > 0 else -H) * 0.92
+        ntr = max(5, min(16, int(2 * H / max(street * 1.6, thin * 4))))
+        gap_v = 2 * H / ntr
+        tracks = [-H + gap_v * (i + 0.5) for i in range(ntr)]
+        throat = W * rng.uniform(0.18, 0.26)
+        # A ladder at each end: one diagonal track from the lead corner, every
+        # siding branching off it, so the yard is parallel lines between two
+        # diagonals rather than a fan.
+        far_v = -lead_v
+        span_v = far_v - lead_v
+        for v in tracks:
+            f = (v - lead_v) / span_v                       # 0 at the lead side
+            line((-W + throat * f, v), (W - throat * f, v), thin, tc)
+        line((-W, lead_v), (-W + throat, far_v), thin * 1.3, tc)
+        line((W, lead_v), (W - throat, far_v), thin * 1.3, tc)
+        if rail_v is not None:                              # spurs onto the main line
+            reach = abs(rail_v - lead_v) * 1.6
+            line((-W, lead_v), (-W - reach, rail_v), thin * 1.4, tc)
+            line((W, lead_v), (W + reach, rail_v), thin * 1.4, tc)
+        # Long sheds over some sidings, platforms between others.
+        sheds = rng.sample(range(ntr), k=max(1, ntr // 4))
+        for i in sheds:
+            u0 = rng.uniform(-W + throat, W * 0.1)
+            u1 = min(W - throat, u0 + W * rng.uniform(0.6, 1.1))
+            rect(u0, u1, tracks[i] - gap_v * 0.36, tracks[i] + gap_v * 0.36,
+                 col(A if rng.random() < 0.75 else pick(dark)))
+        if elab >= 2:
+            for i in range(1, ntr - 1, 3):
+                v = (tracks[i] + tracks[i + 1]) / 2
+                rect(-W * 0.4, W * 0.4, v - gap_v * 0.12, v + gap_v * 0.12, col(g.lead))
+        # Roundhouse: a turntable with stalls fanned round it, in the corner
+        # away from the line.
+        if elab >= 1 or rng.random() < 0.5:
+            r = min(W * 0.18, H * 0.55)
+            ru = W - throat - r * 1.6
+            rv = -lead_v / 0.92 * (1 - 1.6 * r / H) if H > 1.6 * r else 0.0
+            rect(ru - r * 1.75, ru + r * 1.75, rv - r * 1.75, rv + r * 1.75, ground)
+            k = rng.randint(7, 11)
+            away = -1 if lead_v > 0 else 1
             for i in range(k):
-                ang = math.pi * (0.5 + i / (k - 1))
-                cu, cv = ru + r * 1.45 * math.cos(ang), rv + r * 1.45 * math.sin(ang)
-                bar(L(cu, cv), (t[0] * math.cos(ang) + n[0] * math.sin(ang),
-                                t[1] * math.cos(ang) + n[1] * math.sin(ang)),
-                    (-t[0] * math.sin(ang) + n[0] * math.cos(ang),
-                     -t[1] * math.sin(ang) + n[1] * math.cos(ang)),
-                    r * 0.8, r * 0.28, col(A))
-            ell(ru, rv, r * 0.7, r * 0.7, col(g.lead))
+                a_ = math.pi * (i / (k - 1)) * (1 if away > 0 else -1)
+                du, dv = math.cos(a_), math.sin(a_)
+                cu, cv = ru + r * 1.35 * du, rv + r * 1.35 * dv
+                bar(L(cu, cv), (t[0] * du + n[0] * dv, t[1] * du + n[1] * dv),
+                    (-t[0] * dv + n[0] * du, -t[1] * dv + n[1] * du),
+                    r * 0.7, r * 0.26, col(A))
+            ell(ru, rv, r * 0.62, r * 0.62, col(g.lead))
+            line((ru - r * 0.62, rv), (-W + throat, rv), thin, tc)
 
     elif kind == "circus":
         # Concentric rings of wedge-shaped buildings around a round square.

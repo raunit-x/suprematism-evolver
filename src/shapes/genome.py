@@ -12,6 +12,7 @@ back-to-front within each group), then all satellites on top.
 
 from __future__ import annotations
 
+import copy
 import math
 import random
 from dataclasses import dataclass, field
@@ -88,13 +89,14 @@ class Shape:
     stacked: bool = False    # stands on another block (expression-only, not saved)
     float_gap: float = 0.0   # rare: hovers this far above what's below; the
                              # renderer paints a hard shadow to show the gap
+    pack: dict | None = None # interior polygon packing (src/shapes/packing.py)
 
     def copy(self) -> Shape:
         return Shape(
             self.kind, self.x, self.y, self.w, self.h,
             self.rotation, self.color_idx, self.opacity, self.material,
             self.depth, self.elevation, self.detail, self.bleed, self.stacked,
-            self.float_gap,
+            self.float_gap, copy.deepcopy(self.pack),
         )
 
     def to_dict(self) -> dict:
@@ -112,6 +114,8 @@ class Shape:
             d["detail"] = self.detail
         if self.bleed:
             d["bleed"] = True
+        if self.pack:
+            d["pack"] = copy.deepcopy(self.pack)
         return d
 
     @classmethod
@@ -126,6 +130,7 @@ class Shape:
             material=material,
             depth=d.get("depth", 0.0), elevation=d.get("elevation", 0.0),
             detail=d.get("detail", "none"), bleed=d.get("bleed", False),
+            pack=copy.deepcopy(d.get("pack")),
         )
 
 
@@ -218,6 +223,8 @@ class ShapeGenome:
     # City-plan genes (src/shapes/citymap.CityGenome) for Maps mode; when
     # set, the map is painted from these genes and groups/satellites are empty.
     city: object = None
+    # Treatment of regions where large planes overlap (src/shapes/packing.py).
+    overlap: dict | None = None
 
     def flatten(self) -> list[Shape]:
         """Return all shapes in rendering order (back-to-front)."""
@@ -261,6 +268,7 @@ class ShapeGenome:
             engine_tag=self.engine_tag,
             comp=self.comp.copy() if self.comp is not None else None,
             city=self.city.copy() if self.city is not None else None,
+            overlap=copy.deepcopy(self.overlap),
         )
 
     def to_dict(self) -> dict:
@@ -294,6 +302,8 @@ class ShapeGenome:
             d["comp"] = self.comp.to_dict()
         if self.city is not None:
             d["city"] = self.city.to_dict()
+        if self.overlap:
+            d["overlap"] = copy.deepcopy(self.overlap)
         return d
 
     @classmethod
@@ -323,7 +333,8 @@ class ShapeGenome:
                        density_falloff=d.get("density_falloff", 0.5),
                        engine_tag=d.get("engine_tag", ""),
                        comp=_comp_from_dict(d.get("comp")),
-                       city=_city_from_dict(d.get("city")))
+                       city=_city_from_dict(d.get("city")),
+                       overlap=copy.deepcopy(d.get("overlap")))
         # Backward compat: old flat format with "shapes" key
         shapes = [Shape.from_dict(s) for s in d.get("shapes", [])]
         if not shapes:
@@ -913,6 +924,8 @@ def create_random(num_palette_colors: int = 16) -> ShapeGenome:
     )
     _apply_gravitational_alignment(genome)
     _apply_focal_weighting(genome)
+    from src.shapes.packing import seed_packing
+    seed_packing(genome, num_palette_colors)
     return genome
 
 
@@ -1186,6 +1199,11 @@ def mutate(genome: ShapeGenome, num_palette_colors: int = 16,
             # Shapes stay fully opaque; glass translucency is a render effect.
             s.opacity = random.uniform(0.94, 1.0)
 
+    # ------ Packing and overlaps (flat shapes engine) ------
+    if not genome.engine_tag and genome.projection_strength <= 0.01:
+        from src.shapes.packing import mutate_packing
+        mutate_packing(genome, num_palette_colors, strength)
+
     # ------ Compositional post-processing ------
     if random.random() < 0.35:
         _apply_gravitational_alignment(genome)
@@ -1268,6 +1286,8 @@ def _crossover_blend_genome_params(a: ShapeGenome, b: ShapeGenome,
         focal_y=_lerp(a.focal_y, b.focal_y, t),
         density_falloff=_lerp(a.density_falloff, b.density_falloff, t),
         engine_tag=a.engine_tag or b.engine_tag,
+        overlap=copy.deepcopy(a.overlap if (a.overlap and (random.random() < 0.5 or not b.overlap))
+                              else b.overlap),
     )
 
 

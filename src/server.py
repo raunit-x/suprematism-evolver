@@ -5,6 +5,7 @@ Engines:
   - "shapes"      : Shape-genome evolution (explicit geometric primitives)
   - "hadid"/"maps": 3D variants of the shapes engine
   - "renaissance" : sacred-scene genomes + CPPN fields, glaze renderer
+  - "flow"        : expressionist landscapes painted along evolvable flow fields
 
 Launch:
     python -m src.server
@@ -31,6 +32,7 @@ from collections import OrderedDict
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
+from src.gallery import Gallery
 from src.neat.population import Population
 from src.cppn.renderer import render_to_image
 from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE, HADID_PALETTE, MAPS_PALETTE
@@ -40,12 +42,13 @@ from src.cppn.activations import MALEVICH_ACTIVATIONS, ALL_ACTIVATIONS
 from src.shapes.population import ShapePopulation
 from src.shapes.renderer import render_genome, render_genome_extended
 from src.renaissance.population import RenaissancePopulation
+from src.flow.population import FlowPopulation
 from src import render_pool
 
 OUTPUT_DIR = Path("output")
 # Engines whose population lives in ``AppState.shape_pop`` and renders on
 # the process pool.
-SHAPE_ENGINES = ("shapes", "hadid", "maps", "renaissance")
+SHAPE_ENGINES = ("shapes", "hadid", "maps", "renaissance", "flow")
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -187,8 +190,9 @@ class AppState:
     # ---- Initialization ----
 
     def initialize(self):
-        if self.engine == "renaissance":
-            pop = RenaissancePopulation(self._build_shape_config())
+        if self.engine in ("renaissance", "flow"):
+            cls = FlowPopulation if self.engine == "flow" else RenaissancePopulation
+            pop = cls(self._build_shape_config())
             pop.initialize()
             self.shape_pop = pop
             self.pop = None
@@ -216,19 +220,26 @@ class AppState:
         self._history_idx = -1
         self._push_history()
 
-    def adopt_shapes(self, genomes: list) -> dict:
-        """Start a Shapes session from externally bred genomes (the home demo).
-        Missing slots are filled with offspring of the adopted genomes."""
+    def adopt_shapes(self, genomes: list, engine: str = "shapes") -> dict:
+        """Start a shapes-family session from externally bred genomes (the
+        home demo).  Missing slots are filled with offspring of the adopted
+        genomes."""
         import random
+        from src.shapes import citymap
         with self.lock:
-            self.engine = "shapes"
+            self.engine = engine
             self.pop = None
             self._networks = []
             self.shape_pop = ShapePopulation(self._build_shape_config())
             pool = list(genomes)
             while len(pool) < self.pop_size:
-                pool.append(self.shape_pop._breed_child(
-                    random.sample(genomes, min(2, len(genomes)))))
+                if genomes[0].city is not None:
+                    child = random.choice(genomes).copy()
+                    citymap.mutate_city(child.city, self.mutation_strength, 1.0)
+                else:
+                    child = self.shape_pop._breed_child(
+                        random.sample(genomes, min(2, len(genomes))))
+                pool.append(child)
             self.shape_pop.genomes = pool[: self.pop_size]
             self._history = []
             self._history_idx = -1
@@ -919,6 +930,8 @@ def api_infographic(refresh: int = 0):
 
 DEMO_SIZE = 8
 DEMO_PX = 240
+DEMO_ENGINE = "maps"
+DEMO_PALETTE = list(MAPS_PALETTE.values())
 _demo_lock = threading.Lock()
 _demo: dict = {"pop": None, "lineage": []}
 
@@ -927,7 +940,81 @@ def _hex(rgb) -> str:
     return "#" + "".join(f"{int(round(max(0.0, min(1.0, c)) * 255)):02x}" for c in rgb)
 
 
+def _city_summary(c, palette) -> dict:
+    """A city map's structural genes in the same shape as ``_genome_summary``:
+    streets, avenues, rails and waterways become lines/curves (``pts``),
+    plazas, the radial hub and building complexes become solid forms."""
+    import math
+
+    def col(i):
+        return _hex(palette[i % len(palette)])
+
+    def curve(kind, cv, color, width):
+        pts = cv.get("pts") or []
+        if len(pts) < 2:
+            return None
+        (x0, y0), (x1, y1) = pts[0], pts[-1]
+        mx = sum(p[0] for p in pts) / len(pts)
+        my = sum(p[1] for p in pts) / len(pts)
+        return {"k": kind, "x": round(mx, 4), "y": round(my, 4),
+                "w": round(math.hypot(x1 - x0, y1 - y0), 4), "h": round(width, 4),
+                "r": round(math.degrees(math.atan2(y1 - y0, x1 - x0)), 1), "c": color,
+                "pts": [[round(x, 4), round(y, 4)] for x, y in pts]}
+
+    ink = col(1 if c.ground != 1 else 7)
+    water = col(c.water_color if c.water_color >= 0 else 3)
+    lead = col(c.lead)
+    geom = []
+    for w in c.waters:
+        if w.get("kind") == "lake":
+            d = 2 * w.get("r", 0.1)
+            geom.append({"k": "lake", "x": round(w["x"], 4), "y": round(w["y"], 4),
+                         "w": round(d, 4), "h": round(d, 4), "r": 0.0, "c": water})
+        else:
+            g = curve(w.get("kind", "river"), w, water, max(0.012, w.get("width", 0.0)))
+            if g:
+                geom.append(g)
+    if c.hub:
+        d = 2 * c.hub.get("ring", 0.1)
+        geom.append({"k": "hub", "x": round(c.hub["x"], 4), "y": round(c.hub["y"], 4),
+                     "w": round(d, 4), "h": round(d, 4), "r": round(c.hub.get("rot", 0.0), 1),
+                     "c": ink})
+    for cx in c.complexes:
+        geom.append({"k": cx.get("kind", "complex"), "x": round(cx["x"], 4),
+                     "y": round(cx["y"], 4), "w": round(cx["w"], 4), "h": round(cx["h"], 4),
+                     "r": round(cx.get("angle", 0.0), 1), "c": lead})
+    for pl in c.plazas:
+        d = 2 * pl.get("r", 0.05)
+        geom.append({"k": "plaza" if pl.get("shape") == "circle" else "square",
+                     "x": round(pl["x"], 4), "y": round(pl["y"], 4), "w": round(d, 4),
+                     "h": round(d, 4), "r": 0.0,
+                     "c": lead if pl.get("fill") == "lead" else ink})
+    for av in c.avenues:
+        g = curve("avenue", av, ink, max(0.008, av.get("width", 0.01)))
+        if g:
+            geom.append(g)
+    for rl in c.rails:
+        g = curve("rail", rl, ink, 0.006)
+        if g:
+            geom.append(g)
+    for cut in c.cuts:
+        geom.append({"k": "street", "x": round(cut["x"], 4), "y": round(cut["y"], 4),
+                     "w": round(min(cut["length"], 1.5), 4), "h": round(cut["width"], 4),
+                     "r": round(cut["angle"], 1), "c": ink})
+    weights = sorted(range(len(c.weights)), key=lambda i: -c.weights[i])
+    used = [lead] + [col(i) for i in weights if c.weights[i] > 0 and i != c.ground]
+    colors = list(dict.fromkeys(used))[:6]
+    kinds: dict[str, int] = {}
+    for g in geom:
+        kinds[g["k"]] = kinds.get(g["k"], 0) + 1
+    return {"groups": 0, "satellites": 0, "shapes": len(geom), "kinds": kinds,
+            "colors": colors, "armature": round(c.base_angle, 1), "plan": c.plan,
+            "geom": geom[:40]}
+
+
 def _genome_summary(g, palette) -> dict:
+    if getattr(g, "city", None) is not None:
+        return _city_summary(g.city, palette)
     shapes = g.flatten()
     kinds: dict[str, int] = {}
     for s in shapes:
@@ -956,13 +1043,14 @@ def _genome_summary(g, palette) -> dict:
 
 def _demo_payload(images: list[str]) -> dict:
     pop = _demo["pop"]
-    palette = list(SUPREMATIST_PALETTE.values())
+    palette = DEMO_PALETTE
     return {
         "generation": pop.generation,
         "images": images,
         "genomes": [_genome_summary(g, palette) for g in pop.genomes],
         "lineage": _demo["lineage"],
         "mutation": pop.mutation_strength,
+        "engine": DEMO_ENGINE,
     }
 
 
@@ -979,7 +1067,7 @@ def api_demo():
             if not _demo.get("images"):
                 # Renders were discarded (page reload): redraw the same genomes.
                 _demo["images"] = _render_all(
-                    pop.genomes, DEMO_PX, list(SUPREMATIST_PALETTE.values()),
+                    pop.genomes, DEMO_PX, DEMO_PALETTE,
                     state.grain_strength, state.gradient_strength)
             return JSONResponse(_demo_payload(_demo["images"]))
     return api_demo_seed()
@@ -987,14 +1075,14 @@ def api_demo():
 
 @app.post("/api/demo/seed")
 def api_demo_seed():
-    palette = list(SUPREMATIST_PALETTE.values())
+    palette = DEMO_PALETTE
     with _demo_lock:
         pop = ShapePopulation({
             "pop_size": DEMO_SIZE, "num_palette_colors": len(palette),
             "elitism": 2, "crossover_rate": 0.7, "tournament_k": 2,
             "mutation_strength": 1.0,
         })
-        pop.initialize()
+        pop.initialize_maps()
         _demo["pop"] = pop
         _demo["lineage"] = []
         imgs = _render_all(pop.genomes, DEMO_PX, palette,
@@ -1005,7 +1093,7 @@ def api_demo_seed():
 
 @app.post("/api/demo/breed")
 def api_demo_breed(req: DemoBreedRequest):
-    palette = list(SUPREMATIST_PALETTE.values())
+    palette = DEMO_PALETTE
     with _demo_lock:
         pop = _demo["pop"]
         if pop is None:
@@ -1035,7 +1123,7 @@ def api_demo_adopt():
         if pop is None:
             return JSONResponse({"error": "seed first"}, status_code=409)
         genomes = [g.copy() for g in pop.genomes]
-    data = state.adopt_shapes(genomes)
+    data = state.adopt_shapes(genomes, DEMO_ENGINE)
     return JSONResponse(data)
 
 
@@ -1076,6 +1164,39 @@ def index():
 def evolve_page():
     html_path = STATIC_DIR / "index.html"
     return HTMLResponse(html_path.read_text())
+
+
+@app.get("/gallery", response_class=HTMLResponse)
+def gallery_page():
+    return HTMLResponse((STATIC_DIR / "index.html").read_text())
+
+
+# ---------------------------------------------------------------------------
+# Gallery: finished work in output/ (export-all zips + hi-res renders)
+# ---------------------------------------------------------------------------
+
+_gallery = Gallery(OUTPUT_DIR)
+
+
+@app.get("/api/gallery")
+def api_gallery():
+    return JSONResponse(_gallery.listing())
+
+
+@app.get("/api/gallery/img/{iid}")
+def api_gallery_img(iid: str, size: str = "thumb"):
+    if size == "original":
+        got = _gallery.original(iid)
+        if got is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        data, name = got
+        return Response(data, media_type="image/png",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    path = _gallery.preview(iid, size)
+    if path is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 # ---------------------------------------------------------------------------

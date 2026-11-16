@@ -1797,6 +1797,44 @@ def _composite_shape(canvas: Image.Image, shape: Shape,
         soft.crop((cx0 - dx, cy0 - dy, cx1 - dx, cy1 - dy)), (cx0, cy0))
 
 
+def _paint_shapes_2d(canvas: Image.Image, genome: ShapeGenome, palette: list[tuple],
+                     ground_rgb: tuple[int, int, int]) -> None:
+    """Paint the flat composition: each plane, then its interior packing,
+    then (for large planes) the region it shares with earlier large planes."""
+    from src.shapes import packing
+
+    shapes = genome.flatten()
+    overlap = getattr(genome, "overlap", None)
+    if not overlap and not any(getattr(s, "pack", None) for s in shapes):
+        for shape in shapes:
+            _composite_shape(canvas, shape, palette)
+        return
+
+    iw, ih = canvas.size
+    pal = lambda i: _palette_rgb(palette, i)                     # noqa: E731
+    lums = [(0.299 * r + 0.587 * g + 0.114 * b, i)
+            for i, (r, g, b) in enumerate(_palette_rgb(palette, k) for k in range(len(palette)))]
+    dark_rgb = pal(min(lums)[1])
+    texture = lambda layer: _apply_shape_texture(layer, strength=10.0)   # noqa: E731
+    union: Image.Image | None = None
+    for shape in shapes:
+        _composite_shape(canvas, shape, palette)
+        is_structure = shape.w * shape.h >= packing.STRUCTURE_AREA and shape.kind != "line"
+        if not (shape.pack or (overlap and is_structure)):
+            continue
+        mask = packing.shape_mask(shape, iw, ih, _SHAPE_DRAWERS, _draw_rect)
+        if shape.pack:
+            packing.paint_pack(canvas, shape, mask, pal, ground_rgb, dark_rgb, texture)
+        if overlap and is_structure:
+            if union is not None:
+                shared = ImageChops.multiply(union, mask)
+                packing.paint_overlap(canvas, overlap, shared, shape, pal, ground_rgb,
+                                      dark_rgb, texture)
+                union = ImageChops.lighter(union, mask)
+            else:
+                union = mask
+
+
 def _composite_layer(canvas: Image.Image, layer: Image.Image) -> None:
     """alpha_composite a full-size sparse layer, touching only its bbox."""
     bbox = layer.getbbox()
@@ -1975,8 +2013,7 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
     bg_rgb = _palette_rgb(palette, genome.bg_color_idx)
     canvas = Image.new("RGBA", (iw, ih), bg_rgb + (255,))
 
-    for shape in genome.flatten():
-        _composite_shape(canvas, shape, palette)
+    _paint_shapes_2d(canvas, genome, palette, bg_rgb)
 
     result = _apply_finish(canvas.convert("RGB"), 14.0, grain, gradient)
 
@@ -2070,8 +2107,7 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
         _build_stack_3d(genome, sq_iw, sq_ih, palette, base=shapes_layer, grain=grain)
     else:
         shapes_layer = Image.new("RGBA", (sq_iw, sq_ih), (0, 0, 0, 0))
-        for shape in genome.flatten():
-            _composite_shape(shapes_layer, shape, palette)
+        _paint_shapes_2d(shapes_layer, genome, palette, bg_rgb)
 
     canvas.paste(shapes_layer, (off_x, off_y), shapes_layer)
 

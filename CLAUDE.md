@@ -10,6 +10,7 @@ A Picbreeder-style interactive evolution system for generating abstract art. Use
 - **CPPN engine**: Evolves neural networks (CPPN + NEAT) that map pixel coordinates to colors
 - **Hadid engine**: 3D architecton variant of shapes with oblique cuboid projection
 - **Renaissance engine** (`src/renaissance/`): sacred-scene genome (setting, one-point perspective, light, draped figures drawn from compositional priors) plus a small NEAT CPPN for cloud/fold/terrain fields; rendered as underpainting + Kubelka-Munk pigment mixing and glazes. Runs through `shape_pop` like the shapes engines (`SHAPE_ENGINES` in `server.py`); `render_pool` dispatches on `genome.engine_tag == "renaissance"`
+- **Flow engine** (`src/flow/`): expressionist landscapes. Genome = landscape primitives (hill/field/water bands, orbs, sky swirls, cypresses, round trees, roads), each owning a flow field, plus a small NEAT CPPN (turbulence/value/terrain), Van Gogh/Munch/Matisse style weights and a `maturity` gene. Renderer traces streamline brushstrokes through the flow field (KM colour mixing, bristle LIC along each stroke's own direction, impasto relief, occlusion-aware contours). `maturity` 0 = raw neo-expressionist (turbulence, strokes crossing shapes, clashing colour, drips), 1 = clean oil painting; `FlowPopulation` adds maturity drift to children and survivors so lineages converge. Also runs through `shape_pop`; `render_pool` dispatches on `engine_tag == "flow"`
 
 ## Commands
 

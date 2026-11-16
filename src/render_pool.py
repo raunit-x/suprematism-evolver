@@ -81,8 +81,16 @@ def _is_renaissance(genome) -> bool:
     return getattr(genome, "engine_tag", None) == "renaissance"
 
 
+def _is_flow(genome) -> bool:
+    return getattr(genome, "engine_tag", None) == "flow"
+
+
 def render_task(genome, size: int, palette, grain: float, gradient: float,
                 fmt: str = "jpeg") -> bytes:
+    if _is_flow(genome):
+        # The grain slider scales the impasto relief.
+        from src.flow.renderer import render_flow
+        return _encode(render_flow(genome, size, size, impasto_scale=grain / 8.0), fmt)
     if _is_renaissance(genome):
         # Palette/gradient don't apply; the grain slider scales brushwork.
         from src.renaissance.renderer import render_scene
@@ -95,6 +103,10 @@ def render_task(genome, size: int, palette, grain: float, gradient: float,
 
 def render_hires_task(genome, size: int, orientation: str, palette,
                       grain: float, gradient: float) -> bytes:
+    if _is_flow(genome):
+        from src.flow.renderer import render_flow_extended
+        img = render_flow_extended(genome, size, orientation, impasto_scale=grain / 8.0)
+        return _encode(img, "png")
     if _is_renaissance(genome):
         from src.renaissance.renderer import render_scene_extended
         img = render_scene_extended(genome, size, orientation,
