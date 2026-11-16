@@ -234,7 +234,8 @@ button{font-family:inherit}
 .kbd-state.on{color:var(--blue)}
 .kbd-state.on i{background:var(--blue);transform:rotate(45deg)}
 
-.story{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,1fr);gap:64px;align-items:start}
+.story{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(360px,1fr);gap:56px;align-items:start}
+.story-stage{position:sticky;top:24px}
 .story-stage{position:relative}
 .lab-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .lab-cell{
@@ -265,10 +266,10 @@ button{font-family:inherit}
 .stage-foot{display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:10px;border-top:1px solid var(--rule)}
 .stage-foot b{color:var(--ink);font-weight:500}
 
-.story-panel{position:sticky;top:24px;display:flex;flex-direction:column;gap:40px}
+.story-panel{display:flex;flex-direction:column;gap:32px}
 .progress{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .progress button{
-  background:none;border:none;cursor:pointer;text-align:left;padding:0;color:var(--ink-3);
+  background:none;border:none;cursor:pointer;text-align:left;padding:0;color:var(--ink-3);display:block;
   font-family:var(--mono);font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;transition:color var(--med) var(--ease);
 }
 .progress i{display:block;height:4px;background:var(--paper-3);margin-bottom:10px;position:relative;overflow:hidden}
@@ -276,8 +277,11 @@ button{font-family:inherit}
 .progress button.done i::after{transform:scaleX(1);opacity:.3}
 .progress button.active i::after{transform:scaleX(1);opacity:1}
 .progress button.active,.progress button:hover{color:var(--ink)}
+.progress .pn{display:block;font-family:var(--sans);font-stretch:66%;font-weight:800;font-size:1.5rem;line-height:1;letter-spacing:0;margin-bottom:2px;color:var(--paper-3);transition:color var(--med) var(--ease)}
+.progress button.done .pn{color:var(--ink-3)}
+.progress button.active .pn{color:var(--c)}
 
-.scenes{display:grid;min-height:330px}
+.scenes{display:grid;min-height:510px}
 .scene{grid-area:1/1;visibility:hidden;pointer-events:none;transition:visibility 0s linear var(--slow)}
 .scene.active{visibility:visible;pointer-events:auto;transition:none}
 .scene>*{opacity:0;transform:translateY(18px);filter:blur(6px);transition:opacity 420ms var(--ease),transform var(--slow) var(--ease),filter 420ms var(--ease)}
@@ -289,20 +293,18 @@ button{font-family:inherit}
 .scene.active>*:nth-child(5){transition-delay:200ms}
 .scene .kicker{font-family:var(--mono);font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:var(--c)}
 .scene[data-step="3"] .kicker{color:#a87806}
-.scene h3{font-size:clamp(2.2rem,3.4vw,3.2rem);font-weight:800;line-height:.9;margin:14px 0 14px}
-.scene p{font-family:var(--serif);color:var(--ink-2);font-size:1.18rem;line-height:1.4;margin-bottom:26px;max-width:30ch}
-.formula{font-family:var(--mono);font-size:.76rem;color:var(--ink-2);padding:12px 0;border-top:1px solid var(--ink);border-bottom:1px solid var(--rule);margin-bottom:24px}
-.formula .v{color:var(--blue)}
-.formula sub{font-size:.7em;color:var(--blue)}
-.formula b{font-weight:500;color:#a87806}
-.live,.ins b,.vec i{display:inline-block}
+.scene h3{font-size:clamp(2rem,3vw,2.8rem);font-weight:800;line-height:.9;margin:12px 0 12px}
+.scene p{font-family:var(--serif);color:var(--ink-2);font-size:1.12rem;line-height:1.4;margin-bottom:22px;max-width:36ch}
+.live{display:inline-block}
 .roll{animation:roll 420ms var(--ease) both}
 @keyframes roll{from{opacity:0;transform:translateY(55%);filter:blur(3px)}}
-.vec i{font-style:normal;margin:0 .28em;color:var(--ink-3);transition:color var(--med) var(--ease)}
-.vec i.on{color:var(--red);font-weight:500}
 .lab-cell .genes{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 .lab-cell .genes *{fill:none;stroke:var(--ink);stroke-width:1.4;vector-effect:non-scaling-stroke;stroke-dasharray:1;stroke-dashoffset:1;animation:draw 700ms var(--ease) forwards}
 .lab-cell .genes .cx{stroke:var(--red);stroke-width:1}
+.lab-cell .genes g{transition:opacity var(--fast)}
+.lab-cell .genes.has-hl g:not(.hl){opacity:.2}
+.lab-cell .genes g.hl *{stroke:var(--red);stroke-width:2.6}
+.lab-cell .genes g.hl .dot{fill:var(--red)}
 .lab-cell .genes .dot{fill:var(--ink);stroke:none;opacity:0;animation:pop 400ms var(--ease) forwards}
 @keyframes draw{to{stroke-dashoffset:0}}
 @keyframes pop{to{opacity:1}}
@@ -310,13 +312,6 @@ button{font-family:inherit}
 .lab-cell .scan{position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--ink);transform:scaleX(0);transform-origin:left}
 .story[data-step="1"] .lab-grid:not(:hover) .lab-cell.focus .scan{animation:scan var(--cycle) linear both}
 @keyframes scan{to{transform:scaleX(1)}}
-.formula .op{color:var(--red)}
-
-.ins{display:flex;gap:28px;align-items:flex-end}
-.ins b{display:block;font-size:2.4rem;font-weight:800;line-height:.9}
-.ins small{display:block;font-family:var(--mono);font-size:.56rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);margin-top:6px}
-.swatches{display:flex;gap:3px;margin-left:auto}
-.swatches span{width:14px;height:22px;animation:rise var(--med) var(--ease) both}
 
 .count{display:flex;align-items:baseline;gap:14px}
 .count b{font-size:5.6rem;font-weight:900;line-height:.85;color:var(--red);display:inline-block}
@@ -331,12 +326,107 @@ button{font-family:inherit}
 #lab-mut::-moz-range-thumb{background:var(--yellow)}
 .scene .btn{width:100%}
 
-.lineage{display:flex;gap:14px;overflow-x:auto;padding-bottom:4px;margin-bottom:20px;min-height:58px}
-.lin-gen{display:flex;flex-direction:column;gap:6px;flex-shrink:0;animation:rise var(--med) var(--ease) both}
-.lin-gen .thumbs{display:flex;gap:3px}
-.lin-gen img{width:32px;height:32px;display:block;object-fit:cover}
-.lin-gen.now .label{color:var(--blue)}
-.lin-empty{font-family:var(--serif);font-style:italic;font-size:1rem;color:var(--ink-3)}
+
+/* Figures: every step is a diagram with a catalogue caption */
+.fig{margin:0 0 22px;padding-top:14px;border-top:1.5px solid var(--ink)}
+.fig figcaption{display:flex;justify-content:space-between;gap:12px;margin-top:12px;font-family:var(--mono);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.fig figcaption b{font-weight:500;color:var(--ink)}
+.fig figcaption .live{color:var(--ink)}
+
+/* Fig. 2 -- gene chart */
+.gt-head,.gt-row{display:grid;grid-template-columns:26px minmax(0,1.5fr) 40px minmax(0,1fr) 54px;gap:14px;align-items:center}
+.gt-head{padding-bottom:8px;font-family:var(--mono);font-size:.56rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);border-bottom:1px solid var(--rule)}
+.gt-row{padding:6px 0;border-bottom:1px solid var(--rule);cursor:default;animation:fadeUp var(--med) var(--ease) both;animation-delay:var(--d);transition:background var(--fast)}
+.gt-row:hover,.gt-row.hl{background:rgba(198,40,28,.06)}
+.gt-n{font-family:var(--mono);font-size:.62rem;color:var(--ink-3)}
+.gt-row:hover .gt-n,.gt-row.hl .gt-n{color:var(--red)}
+.gt-form{display:flex;align-items:center;gap:10px;min-width:0}
+.gt-form svg{width:30px;height:30px;flex-shrink:0;background:var(--sheet)}
+.gt-form em{font-style:normal;font-family:var(--serif);font-size:1rem;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gt-place{position:relative;width:30px;height:30px;border:1px solid var(--ink);background:var(--sheet)}
+.gt-place::before,.gt-place::after{content:'';position:absolute;background:var(--rule)}
+.gt-place::before{left:50%;top:0;bottom:0;width:1px}
+.gt-place::after{top:50%;left:0;right:0;height:1px}
+.gt-place i{position:absolute;z-index:1;width:6px;height:6px;margin:-3px 0 0 -3px;background:var(--red)}
+.gt-size{position:relative;height:10px;border-left:1px solid var(--ink);border-right:1px solid var(--rule)}
+.gt-size::before{content:'';position:absolute;left:0;right:0;top:50%;height:1px;background:var(--rule)}
+.gt-size i{position:absolute;left:0;top:1px;bottom:1px;background:var(--ink);transform-origin:left;animation:grow var(--slow) var(--ease) both;animation-delay:var(--d)}
+@keyframes grow{from{transform:scaleX(0)}}
+.gt-angle{display:flex;align-items:center;gap:8px}
+.gt-angle b{position:relative;width:22px;height:22px;border:1px solid var(--ink);border-radius:50%;flex-shrink:0}
+.gt-angle b i{position:absolute;left:1px;right:1px;top:50%;height:1.5px;margin-top:-.75px;background:var(--ink)}
+.gt-angle small{font-family:var(--mono);font-size:.58rem;color:var(--ink-3)}
+.gt-foot{display:flex;align-items:center;justify-content:space-between;padding-top:10px}
+.gt-more{font-family:var(--serif);font-style:italic;font-size:.95rem;color:var(--ink-3)}
+.swatches{display:flex;gap:3px}
+.swatches span{width:12px;height:20px;animation:rise var(--med) var(--ease) both}
+
+/* Fig. 3 -- parent tray + fitness bars */
+.slots{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:22px}
+.slot{position:relative;aspect-ratio:1;background:var(--paper-2)}
+.slot img{width:100%;height:100%;object-fit:cover;display:block;animation:drop var(--slow) var(--spring) both}
+@keyframes drop{from{opacity:0;transform:translateY(-14px) scale(.92)}}
+.slot span{position:absolute;left:0;bottom:0;padding:2px 6px;background:var(--red);color:#fff;font-family:var(--mono);font-size:.6rem}
+.slot small{position:absolute;right:0;bottom:0;padding:2px 6px;background:var(--sheet);font-family:var(--mono);font-size:.58rem;color:var(--ink)}
+.slot.empty{background:transparent;border:1.5px dashed var(--paper-3);display:grid;place-items:center}
+.slot.empty span{position:static;background:none;color:var(--paper-3);font-family:var(--sans);font-stretch:66%;font-weight:800;font-size:2.2rem;padding:0}
+.fit-row{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;align-items:end}
+.fit{display:flex;flex-direction:column;gap:5px;cursor:pointer}
+.fit .bar{height:46px;display:flex;align-items:flex-end;border-bottom:1.5px solid var(--ink)}
+.fit .bar i{display:block;width:100%;height:3%;background:var(--paper-3);transition:height var(--slow) var(--spring),background var(--med)}
+.fit.on .bar i{height:100%;background:var(--red)}
+.fit img{width:100%;aspect-ratio:1;object-fit:cover;display:block;opacity:.45;filter:saturate(.4);transition:opacity var(--med),filter var(--med)}
+.fit.on img{opacity:1;filter:none}
+.fit small{font-family:var(--mono);font-size:.6rem;text-align:center;color:var(--ink-3)}
+.fit.on small{color:var(--red)}
+.count{display:flex;align-items:baseline;gap:10px}
+.fig figcaption .count b{font-size:2.6rem;font-weight:900;line-height:.85;color:var(--red);display:inline-block}
+.count b.bump{animation:bump 320ms var(--spring)}
+@keyframes bump{40%{transform:scale(1.12)}}
+.count span{font-family:var(--mono);font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+
+/* Fig. 4 -- crossover + mutation */
+.cross{display:grid;grid-template-columns:1fr 18px 1fr 22px 1.3fr;gap:8px;align-items:center}
+.cross[data-n="1"]{grid-template-columns:1fr 22px 1.3fr}
+.x-cell{display:flex;flex-direction:column;gap:8px;min-width:0}
+.x-cell .label{display:flex;justify-content:space-between;gap:6px;font-size:.56rem}
+.x-cell .label b{font-weight:500;color:var(--ink)}
+.x-cell.child .label b{color:#a87806}
+.cv{width:100%;aspect-ratio:1;display:block;overflow:hidden;background:var(--sheet)}
+.cv .splice{stroke:var(--ink);stroke-width:.6;stroke-dasharray:2 1.6;fill:none}
+.cv g.off{opacity:.13}
+.cv .mut{fill:none;stroke:#e2a40e;stroke-width:1.6;stroke-dasharray:2.4 1.6;vector-effect:non-scaling-stroke}
+.x-cell.child .cv{outline:1.5px solid var(--ink);outline-offset:-1.5px}
+.cv-empty{width:100%;aspect-ratio:1;border:1.5px dashed var(--paper-3);display:grid;place-items:center;font-family:var(--sans);font-stretch:66%;font-weight:800;font-size:2rem;color:var(--paper-3)}
+.x-op{font-family:var(--sans);font-weight:400;font-size:1.3rem;text-align:center;color:var(--ink-3);padding-bottom:22px}
+.x-legend{display:flex;gap:16px;margin-top:12px;font-family:var(--mono);font-size:.56rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.x-legend span{display:inline-flex;align-items:center;gap:6px}
+.x-legend i{display:inline-block;width:14px;height:0;border-top:1.5px dashed var(--ink)}
+.x-legend i.m{border-color:#e2a40e;border-top-width:2px;width:10px;height:10px;border:2px dashed #e2a40e}
+.x-legend i.f{border:none;width:10px;height:10px;background:var(--ink);opacity:.15}
+.sigma{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.sigma .label{min-width:1.5em;font-family:var(--serif);font-style:italic;font-size:1.3rem;text-transform:none;color:var(--ink)}
+.sigma output{font-family:var(--mono);font-size:.66rem;min-width:7.5em;text-align:right;color:var(--ink-2)}
+#lab-mut::-webkit-slider-thumb{background:var(--yellow)}
+#lab-mut::-moz-range-thumb{background:var(--yellow)}
+.scene .btn{width:100%}
+
+/* Fig. 5 -- lineage tree */
+.tree{display:flex;flex-direction:column;max-height:300px;overflow-y:auto;margin-bottom:22px}
+.tr-row{position:relative;display:grid;grid-template-columns:44px 1fr auto;gap:14px;align-items:center;padding:8px 0;animation:fadeUp var(--med) var(--ease) both}
+.tr-row::before{content:'';position:absolute;left:12px;top:0;bottom:0;width:1.5px;background:var(--ink)}
+.tr-row:first-child::before{top:50%}
+.tr-row:last-child::before{bottom:50%}
+.tr-g{position:relative;z-index:1;justify-self:start;background:var(--paper);font-family:var(--sans);font-stretch:66%;font-weight:800;font-size:1.15rem;line-height:1;padding:4px 0}
+.tr-g::before{content:'';display:inline-block;width:9px;height:9px;margin:0 8px 1px 8px;background:var(--ink);vertical-align:middle;display:none}
+.tr-imgs{display:flex;gap:4px;flex-wrap:wrap}
+.tr-imgs img{width:46px;height:46px;object-fit:cover;display:block;outline:1.5px solid var(--red);outline-offset:-1.5px}
+.tr-imgs.small img{width:30px;height:30px;outline:none}
+.tr-imgs i{width:46px;height:46px;border:1.5px dashed var(--paper-3)}
+.tr-note{font-family:var(--mono);font-size:.56rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.tr-row.now .tr-g{color:var(--blue)}
+.tr-row.ghost{opacity:.6}
+.tr-row.ghost::before{background:repeating-linear-gradient(var(--ink) 0 3px,transparent 3px 6px)}
 
 .keys{display:flex;flex-wrap:wrap;gap:10px 20px;padding-top:18px;border-top:1px solid var(--rule);font-size:.76rem;color:var(--ink-3);min-height:58px;align-content:flex-start}
 .keys>span{display:inline-flex;align-items:center;gap:5px;animation:fadeUp var(--med) var(--ease) both}
@@ -567,57 +657,62 @@ input[type="range"]:hover::-webkit-slider-thumb,input[type="range"]:active::-web
 
           <div class="story-panel">
             <nav class="progress" id="story-progress" aria-label="Steps">
-              <button data-step="1" style="--c:var(--ink)"><i></i>Seed</button>
-              <button data-step="2" style="--c:var(--red)"><i></i>Select</button>
-              <button data-step="3" style="--c:var(--yellow)"><i></i>Breed</button>
-              <button data-step="4" style="--c:var(--blue)"><i></i>Repeat</button>
+              <button data-step="1" style="--c:var(--ink)"><i></i><span class="pn">01</span>Seed</button>
+              <button data-step="2" style="--c:var(--red)"><i></i><span class="pn">02</span>Select</button>
+              <button data-step="3" style="--c:var(--yellow)"><i></i><span class="pn">03</span>Breed</button>
+              <button data-step="4" style="--c:var(--blue)"><i></i><span class="pn">04</span>Repeat</button>
             </nav>
 
             <div class="scenes">
               <div class="scene" data-step="1" style="--c:var(--ink)">
                 <span class="kicker">01 &mdash; Seed</span>
                 <h3>Every painting is a genome.</h3>
-                <p>Shapes, colours and positions, written as genes.</p>
-                <div class="formula"><span class="v">G</span><sub id="f1-idx" class="live">1</sub> <span class="op">=</span> { <span id="f1-kinds" class="live">&hellip;</span> }</div>
-                <div>
-                  <div class="ins">
-                    <div><b id="ins-groups">&ndash;</b><small>Groups</small></div>
-                    <div><b id="ins-sats">&ndash;</b><small>Satellites</small></div>
-                    <div><b id="ins-shapes">&ndash;</b><small>Shapes</small></div>
-                    <div class="swatches" id="ins-colors"></div>
-                  </div>
-                </div>
+                <p>A painting is just a list of shapes. Each shape is one gene: a form and colour, a place, a size, an angle.</p>
+                <figure class="fig">
+                  <div id="gene-table"></div>
+                  <div class="gt-foot"><span class="gt-more" id="gene-more"></span><span class="swatches" id="gene-swatches"></span></div>
+                  <figcaption><span><b>Fig. 2</b> &mdash; Genome of painting <span class="live" id="gene-of">1</span></span><span>Hover a gene to find it</span></figcaption>
+                </figure>
               </div>
 
               <div class="scene" data-step="2" style="--c:var(--red)">
                 <span class="kicker">02 &mdash; Select</span>
                 <h3>You are the fitness function.</h3>
-                <p>Choose the paintings worth keeping.</p>
-                <div class="formula"><span class="v">f</span> <span class="op">=</span> [<span id="f2-vec" class="vec"></span>]</div>
-                <div class="count"><b id="sel-count">0</b><span>of 8 chosen</span></div>
+                <p>No score, no model of beauty. The paintings you keep are the only ones allowed to breed.</p>
+                <figure class="fig">
+                  <div class="slots" id="sel-slots"></div>
+                  <div class="fit-row" id="fit-row"></div>
+                  <figcaption><span><b>Fig. 3</b> &mdash; Fitness: 1 if kept, 0 if not</span><span class="count"><b id="sel-count">0</b><span>parents</span></span></figcaption>
+                </figure>
               </div>
 
               <div class="scene" data-step="3" style="--c:var(--yellow)">
                 <span class="kicker">03 &mdash; Breed</span>
                 <h3>Recombine. Mutate.</h3>
-                <p>Parents trade traits; every gene drifts a little.</p>
-                <div class="formula"><span class="v">x&prime;</span> <span class="op">=</span> <span class="v">x</span> + N(0, <b id="f3-sigma" class="live">1.0</b>&sup2;) &nbsp;<span class="op">&larr;</span> <span id="f3-par" class="live">no parents</span></div>
+                <p>A child takes one side of each parent, then some genes drift. Drag &sigma; and watch the child change.</p>
+                <figure class="fig">
+                  <div class="cross" id="cross"></div>
+                  <div class="x-legend"><span><i></i>Splice</span><span><i class="f"></i>Not inherited</span><span><i class="m"></i>Mutated gene</span></div>
+                  <figcaption><span><b>Fig. 4</b> &mdash; Crossover &amp; mutation, schematic</span><span id="x-count"></span></figcaption>
+                </figure>
                 <div>
                   <div class="sigma">
                     <span class="label">&sigma;</span>
                     <input type="range" id="lab-mut" min="0.2" max="2.5" step="0.1" value="1" aria-label="Mutation strength">
                     <output id="lab-mut-val">1.0 &middot; moderate</output>
                   </div>
-                  <button class="btn btn-primary" id="lab-breed" disabled>Breed <span class="arrow">&rarr;</span></button>
+                  <button class="btn btn-primary" id="lab-breed" disabled>Breed the real thing <span class="arrow">&rarr;</span></button>
                 </div>
               </div>
 
               <div class="scene" data-step="4" style="--c:var(--blue)">
                 <span class="kicker">04 &mdash; Repeat</span>
                 <h3>Taste compounds.</h3>
-                <p>Each generation inherits what you kept.</p>
-                <div class="formula"><span id="f4-line" class="live">G0 &larr; random</span></div>
-                <div class="lineage" id="lab-lineage"><span class="lin-empty">Breed once to start a lineage.</span></div>
+                <p>Every generation descends only from what you kept, so your eye steers the whole line.</p>
+                <figure class="fig">
+                  <div class="tree" id="lab-lineage"></div>
+                  <figcaption><span><b>Fig. 5</b> &mdash; Lineage, oldest first</span><span>Red frame = kept</span></figcaption>
+                </figure>
                 <button class="btn" id="lab-adopt">Continue in workspace <span class="arrow">&rarr;</span></button>
               </div>
             </div>
@@ -1504,7 +1599,7 @@ function sigmaWord(v){ return v < 0.6 ? 'gentle' : v < 1.4 ? 'moderate' : 'wild'
 function syncSigma(){
   const v = Number(labMut.value);
   labMutVal.textContent = `${v.toFixed(1)} \u00b7 ${sigmaWord(v)}`;
-  setLive($('#f3-sigma'), v.toFixed(1));
+  renderCross();
 }
 labMut.addEventListener('input', syncSigma);
 
@@ -1515,12 +1610,11 @@ function syncGrid(){
     c.classList.toggle('focus', i === lab.focus);
   });
   labGrid.classList.toggle('dim', n > 0 && (lab.step === 2 || lab.step === 3));
-  setLive(selCount, n);
   labBreedBtn.disabled = lab.busy || n === 0;
   labAdoptBtn.disabled = lab.busy || !lab.images.length;
   labReseedBtn.disabled = lab.busy;
   if(!lab.busy) labStatus.textContent = n ? `${n} chosen` : (lab.gen > 0 ? 'offspring' : 'random seed');
-  syncFormulas();
+  syncScenes();
 }
 
 function go(n){
@@ -1554,17 +1648,159 @@ function setLive(el, val){
 function inspect(i){
   const g = lab.genomes[i];
   if(!g) return;
-  const changed = lab.focus !== i || !$('#ins-colors').children.length;
+  const changed = lab.focus !== i || !$('#gene-table').children.length;
   lab.focus = i;
-  setLive($('#ins-groups'), g.groups);
-  setLive($('#ins-sats'), g.satellites);
-  setLive($('#ins-shapes'), g.shapes);
-  setLive($('#f1-idx'), i + 1);
-  setLive($('#f1-kinds'), Object.entries(g.kinds).slice(0, 4).map(([k, v]) => v > 1 ? `${k}\u00d7${v}` : k).join(', '));
-  if(changed) scheduleCycle();
-  if(changed) drawGenes(i);
-  if(changed) $('#ins-colors').innerHTML = g.colors.map((c, j) => `<span style="background:${c};animation-delay:${j * 30}ms"></span>`).join('');
+  if(changed){ scheduleCycle(); drawGenes(i); renderGeneTable(i); }
   syncGrid();
+}
+
+// ---- Figure helpers: redraw genomes as flat SVG from their gene geometry ----
+function rng(seed){
+  return () => {
+    seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function isLight(hex){
+  const n = parseInt(hex.slice(1), 16);
+  return (0.299 * (n >> 16) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) / 255 > .84;
+}
+function shapeSVG(sh, paint){
+  const w = Math.max(sh.w * 100, .4), h = Math.max(sh.h * 100, .6);
+  const t = `transform="translate(${(sh.x * 100).toFixed(2)} ${(sh.y * 100).toFixed(2)}) rotate(${sh.r})"`;
+  const p = paint || `fill="${sh.c}"${isLight(sh.c) ? ' stroke="rgba(23,21,18,.3)" stroke-width=".4"' : ''}`;
+  const poly = pts => `<polygon ${t} points="${pts}" ${p}/>`;
+  switch(sh.k){
+    case 'circle': case 'ellipse': return `<ellipse ${t} rx="${w / 2}" ry="${h / 2}" ${p}/>`;
+    case 'semicircle': return `<path ${t} d="M${-w / 2} 0A${w / 2} ${h / 2} 0 0 1 ${w / 2} 0Z" ${p}/>`;
+    case 'triangle': return poly(`0,${-h / 2} ${w / 2},${h / 2} ${-w / 2},${h / 2}`);
+    case 'trapezoid': return poly(`${-w / 2},${h / 2} ${w / 2},${h / 2} ${w / 4},${-h / 2} ${-w / 4},${-h / 2}`);
+    case 'cross': {
+      const a = Math.min(w, h) * .3;
+      return `<path ${t} d="M${-w / 2} ${-a / 2}h${w}v${a}h${-w}zM${-a / 2} ${-h / 2}h${a}v${h}h${-a}z" ${p}/>`;
+    }
+    default: return `<rect ${t} x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" ${p}/>`;
+  }
+}
+function glyph(sh){
+  const k = .74 / Math.max(sh.w, sh.h, .001);
+  const g = { ...sh, x: .5, y: .5, w: sh.w * k, h: sh.k === 'line' ? .07 : sh.h * k, r: 0 };
+  return `<svg viewBox="0 0 100 100" aria-hidden="true">${shapeSVG(g)}</svg>`;
+}
+
+const GENE_ROWS = 6;
+function renderGeneTable(i){
+  const g = lab.genomes[i], el = $('#gene-table');
+  if(!g || !g.geom){ el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="gt-head"><span>No.</span><span>Form &amp; colour</span><span>Place</span><span>Size</span><span>Angle</span></div>' +
+    g.geom.slice(0, GENE_ROWS).map((sh, j) => {
+      const size = Math.min(1, Math.sqrt(sh.w * Math.max(sh.h, .02)) / .4);
+      const ang = Math.round(((sh.r % 180) + 180) % 180);
+      return `<div class="gt-row" data-j="${j}" style="--d:${j * 50}ms">
+        <span class="gt-n">${String(j + 1).padStart(2, '0')}</span>
+        <span class="gt-form">${glyph(sh)}<em>${sh.k}</em></span>
+        <span class="gt-place"><i style="left:${(sh.x * 100).toFixed(1)}%;top:${(sh.y * 100).toFixed(1)}%"></i></span>
+        <span class="gt-size"><i style="width:${Math.max(4, size * 100).toFixed(0)}%"></i></span>
+        <span class="gt-angle"><b><i style="transform:rotate(${sh.r}deg)"></i></b><small>${ang}&deg;</small></span>
+      </div>`;
+    }).join('');
+  const more = g.shapes - Math.min(GENE_ROWS, g.geom.length);
+  $('#gene-more').textContent = more > 0 ? `+ ${more} more gene${more > 1 ? 's' : ''} \u00b7 ${g.shapes} in all` : `${g.shapes} genes in all`;
+  $('#gene-swatches').innerHTML = g.colors.map((c, j) => `<span style="background:${c};animation-delay:${j * 30}ms"></span>`).join('');
+  setLive($('#gene-of'), i + 1);
+}
+function highlightGene(j){
+  $('#gene-table').querySelectorAll('.gt-row').forEach(r => r.classList.toggle('hl', Number(r.dataset.j) === j));
+  const svg = labGrid.querySelector('.genes');
+  if(!svg) return;
+  svg.classList.toggle('has-hl', j >= 0);
+  svg.querySelectorAll('g').forEach(gr => gr.classList.toggle('hl', Number(gr.dataset.j) === j));
+}
+$('#gene-table').addEventListener('mouseover', e => {
+  const row = e.target.closest('.gt-row');
+  if(row){ lab.hover = true; highlightGene(Number(row.dataset.j)); }
+});
+$('#gene-table').addEventListener('mouseleave', () => { lab.hover = false; highlightGene(-1); scheduleCycle(); });
+
+const b64img = b => `data:image/jpeg;base64,${b}`;
+function renderSelect(){
+  const sel = [...lab.sel];
+  const key = lab.gen + ':' + sel.join(',') + ':' + lab.images.length;
+  if(renderSelect.key === key) return;
+  renderSelect.key = key;
+  $('#sel-slots').innerHTML = [0, 1, 2, 3].map(k => {
+    const i = sel[k];
+    return i === undefined
+      ? `<div class="slot empty"><span>${'ABCD'[k]}</span></div>`
+      : `<div class="slot"><img src="${b64img(lab.images[i])}" alt=""><span>${'ABCD'[k]}</span><small>#${i + 1}</small></div>`;
+  }).join('');
+  $('#fit-row').innerHTML = lab.images.map((b, i) => {
+    const on = lab.sel.has(i);
+    return `<div class="fit${on ? ' on' : ''}" data-i="${i}"><div class="bar"><i></i></div><img src="${b64img(b)}" alt=""><small>${on ? 1 : 0}</small></div>`;
+  }).join('');
+}
+$('#fit-row').addEventListener('click', e => {
+  const f = e.target.closest('.fit');
+  if(f) toggle(Number(f.dataset.i));
+});
+
+// Schematic of one breeding event using the chosen parents' real genes:
+// a splice line divides the canvas, the child takes A's side and B's side,
+// then each gene mutates with a probability and amplitude set by sigma.
+function renderCross(){
+  const el = $('#cross');
+  const sel = [...lab.sel].slice(0, 2);
+  const A = lab.genomes[sel[0]], B = lab.genomes[sel[1]];
+  const sigma = Number(labMut.value);
+  const cell = (inner, label, cls = '') => `<div class="x-cell ${cls}">${inner}<span class="label">${label}</span></div>`;
+  const empty = t => `<div class="cv-empty">${t}</div>`;
+  if(!A || !A.geom){
+    el.dataset.n = 2;
+    el.innerHTML = cell(empty('A'), '<b>Parent A</b>') + '<b class="x-op">+</b>' + cell(empty('B'), '<b>Parent B</b>') +
+      '<b class="x-op">&rarr;</b>' + cell(empty('?'), '<b>Child</b><span>choose in 02</span>', 'child');
+    $('#x-count').textContent = '';
+    return;
+  }
+  const seed = sel.reduce((s, i) => s * 31 + i + 7, lab.gen * 131 + 17);
+  const r0 = rng(seed);
+  const ang = (r0() - .5) * 1.1;
+  const nx = Math.cos(ang), ny = Math.sin(ang);
+  const left = sh => ((sh.x - .5) * nx + (sh.y - .5) * ny) < 0;
+  const splice = `<line class="splice" x1="${50 - ny * 90}" y1="${50 + nx * 90}" x2="${50 + ny * 90}" y2="${50 - nx * 90}"/>`;
+  const draw = (geom, keep) => geom.map(sh => `<g class="${keep(sh) ? '' : 'off'}">${shapeSVG(sh)}</g>`).join('');
+  const svg = inner => `<svg class="cv" viewBox="0 0 100 100" aria-hidden="true">${inner}</svg>`;
+
+  const parts = B
+    ? [...A.geom.filter(left), ...B.geom.filter(sh => !left(sh))]
+    : A.geom.slice();
+  const p = Math.min(.9, .12 + .26 * sigma);
+  let nMut = 0;
+  const child = parts.map((sh, j) => {
+    const r = rng(seed * 97 + j * 13 + 5);
+    if(r() >= p) return { ...sh, m: false };
+    nMut++;
+    const a = sigma;
+    return { ...sh, m: true,
+      x: sh.x + (r() - .5) * .14 * a, y: sh.y + (r() - .5) * .14 * a,
+      r: sh.r + (r() - .5) * 50 * a,
+      w: Math.max(.006, sh.w * (1 + (r() - .5) * .6 * a)), h: Math.max(.006, sh.h * (1 + (r() - .5) * .6 * a)) };
+  });
+  const childSVG = svg(child.map(sh => shapeSVG(sh)).join('') + (B ? splice.replace('class="splice"', 'class="splice" opacity=".35"') : '') +
+    child.filter(sh => sh.m).map(sh => shapeSVG(sh, 'class="mut"')).join(''));
+  const label = (n, i) => `<b>${n}</b><span>#${i + 1}</span>`;
+  if(B){
+    el.dataset.n = 2;
+    el.innerHTML = cell(svg(draw(A.geom, left) + splice), label('Parent A', sel[0])) + '<b class="x-op">+</b>' +
+      cell(svg(draw(B.geom, sh => !left(sh)) + splice), label('Parent B', sel[1])) + '<b class="x-op">&rarr;</b>' +
+      cell(childSVG, `<b>Child</b><span>${nMut} mutated</span>`, 'child');
+  }else{
+    el.dataset.n = 1;
+    el.innerHTML = cell(svg(draw(A.geom, () => true)), label('Parent A', sel[0]) ) + '<b class="x-op">&rarr;</b>' +
+      cell(childSVG, `<b>Child</b><span>${nMut} mutated</span>`, 'child');
+  }
+  $('#x-count').textContent = `${parts.length} genes \u00b7 p(mutate) ${Math.round(p * 100)}%`;
 }
 
 // Draw the focused painting's genes over it: one outline per shape, drawn in sequence.
@@ -1580,6 +1816,7 @@ function drawGenes(i){
   g.geom.forEach((sh, j) => {
     const grp = document.createElementNS(ns, 'g');
     grp.setAttribute('transform', `translate(${sh.x * 100} ${sh.y * 100}) rotate(${sh.r})`);
+    grp.dataset.j = j;
     const w = sh.w * 100, h = sh.h * 100;
     let el;
     if(sh.k === 'line'){
@@ -1603,22 +1840,10 @@ function drawGenes(i){
   cell.append(svg);
 }
 
-function syncFormulas(){
-  const vec = $('#f2-vec');
-  if(vec.children.length !== lab.images.length)
-    vec.innerHTML = lab.images.map(() => '<i>0</i>').join('');
-  [...vec.children].forEach((el, i) => {
-    const on = lab.sel.has(i);
-    el.classList.toggle('on', on);
-    setLive(el, on ? 1 : 0);
-  });
-  const par = [...lab.sel].map(i => `#${i + 1}`);
-  setLive($('#f3-sigma'), Number(labMut.value).toFixed(1));
-  setLive($('#f3-par'), par.length ? par.join(' \u00d7 ') : 'no parents');
-  const last = lab.lineage[lab.lineage.length - 1];
-  setLive($('#f4-line'), last
-    ? `G${lab.gen} \u2190 G${last.generation} \u00b7 ${last.parents.length} parent${last.parents.length > 1 ? 's' : ''}`
-    : `G${lab.gen} \u2190 random`);
+function syncScenes(){
+  setLive(selCount, lab.sel.size);
+  renderSelect();
+  renderCross();
 }
 
 // Seed scene: the inspector walks the population on its own until you take over.
@@ -1635,15 +1860,14 @@ function scheduleCycle(){
 }
 
 function renderLineage(){
-  if(!lab.lineage.length){
-    labLineage.innerHTML = '<span class="lin-empty">Breed once to start a lineage.</span>';
-    return;
-  }
-  const img = b => `<img src="data:image/jpeg;base64,${b}" alt="">`;
-  labLineage.innerHTML = lab.lineage.map(l =>
-    `<div class="lin-gen"><span class="label">G${l.generation}</span><div class="thumbs">${l.parents.map(img).join('')}</div></div>`
-  ).join('') + `<div class="lin-gen now"><span class="label">Now</span><div class="thumbs">${lab.images.slice(0, 2).map(img).join('')}</div></div>`;
-  labLineage.scrollLeft = labLineage.scrollWidth;
+  const imgs = (list, cls = '') => `<div class="tr-imgs ${cls}">${list.map(b => `<img src="${b64img(b)}" alt="">`).join('')}</div>`;
+  const rows = lab.lineage.map(l =>
+    `<div class="tr-row"><span class="tr-g">G${l.generation}</span>${imgs(l.parents)}<span class="tr-note">kept ${l.parents.length}</span></div>`);
+  rows.push(`<div class="tr-row now"><span class="tr-g">G${lab.gen}</span>${imgs(lab.images, 'small')}<span class="tr-note">${lab.lineage.length ? 'now' : 'random seed'}</span></div>`);
+  if(!lab.lineage.length)
+    rows.push('<div class="tr-row ghost"><span class="tr-g">G1</span><div class="tr-imgs"><i></i><i></i></div><span class="tr-note">breed to grow</span></div>');
+  labLineage.innerHTML = rows.join('');
+  labLineage.scrollTop = labLineage.scrollHeight;
 }
 
 function renderLab(d){
@@ -1796,6 +2020,7 @@ go(1);
   try{ await apiFetch('/api/rerender', {}, false); }catch(e){ console.error(e); }
   await setRoute(routeFromPath(window.location.pathname), false);
 })();
+
 </script>
 </body>
 </html>

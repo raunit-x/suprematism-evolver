@@ -33,16 +33,16 @@ import random
 from dataclasses import dataclass, field
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 # Indices into MAPS_PALETTE (src/art/palettes.py).
 PAPER, BLACK, VERMILION, ULTRA, CHROME, WARM_GREY, DARK_GREY, IVORY, CARMINE, \
     COBALT, OCHRE, VIRIDIAN, TEAL, SALMON, PLUM, SIENNA, NAVY, SKY, KRAFT, \
-    PALE_GREY, OLIVE = range(21)
-N_COLORS = 21
+    PALE_GREY, OLIVE, ROSE, ORANGE = range(23)
+N_COLORS = 23
 NEUTRALS = (BLACK, DARK_GREY, WARM_GREY, IVORY, PALE_GREY)
 CHROMAS = (VERMILION, ULTRA, CHROME, CARMINE, COBALT, OCHRE, VIRIDIAN, TEAL,
-           SALMON, PLUM, SIENNA, SKY, OLIVE)
+           SALMON, PLUM, SIENNA, SKY, OLIVE, ROSE, ORANGE)
 
 # Named palettes after Constructivist artists and media: (ground choices,
 # lead, colour weights).  Neutrals carry most of each sheet.
@@ -82,7 +82,28 @@ PALETTE_SETS: dict[str, tuple[tuple[int, ...], int, dict[int, float]]] = {
                    {OLIVE: 1.6, BLACK: 2.2, VERMILION: 0.9, PALE_GREY: 1.2, OCHRE: 0.8,
                     IVORY: 0.6}),
 }
-_PALETTE_WEIGHTS = {"rodchenko": 10, "lissitzky": 8, "klutsis": 9, "popova": 7,
+PALETTE_SETS.update({
+    # Richer, more saturated harmonies.
+    "rodchenko_pink": ((PAPER, IVORY), ROSE,
+                       {BLACK: 2.6, ROSE: 1.6, VERMILION: 1.4, IVORY: 0.8, DARK_GREY: 0.8}),
+    "cobalt_orange":  ((PAPER, IVORY), ORANGE,
+                       {COBALT: 1.8, ULTRA: 1.0, ORANGE: 1.4, NAVY: 1.2, CHROME: 0.6,
+                        IVORY: 0.8, BLACK: 1.0}),
+    "teal_coral":     ((PAPER, PALE_GREY), SALMON,
+                       {TEAL: 1.8, SALMON: 1.4, NAVY: 1.2, IVORY: 0.9, CHROME: 0.5,
+                        BLACK: 0.8}),
+    "plum_ochre":     ((PAPER, KRAFT), OCHRE,
+                       {PLUM: 1.6, OCHRE: 1.4, ROSE: 1.0, BLACK: 1.4, PALE_GREY: 1.0}),
+    "agitprop":       ((PAPER,), VERMILION,
+                       {VERMILION: 2.0, CARMINE: 1.2, ORANGE: 1.0, BLACK: 2.4, IVORY: 0.8,
+                        CHROME: 0.6}),
+    "sea_and_sun":    ((IVORY, PAPER), CHROME,
+                       {ULTRA: 1.5, SKY: 1.4, TEAL: 1.0, CHROME: 1.2, ORANGE: 0.7,
+                        NAVY: 1.0}),
+})
+_PALETTE_WEIGHTS = {"rodchenko_pink": 7, "cobalt_orange": 7, "teal_coral": 7,
+                    "plum_ochre": 6, "agitprop": 7, "sea_and_sun": 6,
+                    "rodchenko": 10, "lissitzky": 8, "klutsis": 9, "popova": 7,
                     "stepanova": 6, "stenberg": 6, "exter": 6, "suetin": 6, "kraft": 5,
                     "blueprint": 4, "night": 3, "mono": 6, "poster": 3, "olive": 4}
 
@@ -98,6 +119,7 @@ MAX_ZONES = 7
 MAX_COMPLEXES = 6
 ZONE_KINDS = ("fine", "coarse", "substrate", "slabs", "solid", "tint", "turn")
 ORN_KINDS = ("court", "split", "stripe", "dot", "frame")
+PRIM_KINDS = ("disc", "semi", "tri", "ellipse", "ring", "notch", "wedge")
 MAX_LOTS = 14000           # keeps worst-case renders bounded
 DOMAIN_PAD = 0.03
 
@@ -145,6 +167,11 @@ class CityGenome:
     zones: list[dict] = field(default_factory=list)    # neighbourhood character
     ornament: float = 0.0              # share of lots with inner detail
     orn_kinds: list[str] = field(default_factory=list)
+    prims: list[str] = field(default_factory=list)     # non-rectangular buildings
+    prim_share: float = 0.0
+    relief: float = 0.0                # 0 flat plan .. 1.4 tall extruded blocks
+    view: float = -60.0                # direction roofs are lifted (degrees)
+    tonal: float = 0.0                 # light/dark range within each colour
 
     def copy(self) -> CityGenome:
         return CityGenome.from_dict(self.to_dict())
@@ -276,11 +303,14 @@ def _new_water_color(g: CityGenome) -> int:
     return -1 if c in (g.ground, g.lead) else c
 
 
-COMPLEX_KINDS = ("courtyard", "stadium", "factory", "institute", "railyard", "park")
+COMPLEX_KINDS = ("courtyard", "stadium", "factory", "institute", "railyard", "park",
+                 "circus", "gasworks", "planetarium")
+ROUND_KINDS = ("circus", "gasworks", "planetarium", "stadium")
 
 
 def _new_complex(kind: str | None = None) -> dict:
-    kind = kind or random.choices(COMPLEX_KINDS, weights=[24, 16, 18, 16, 12, 14])[0]
+    kind = kind or random.choices(COMPLEX_KINDS,
+                                  weights=[20, 14, 14, 14, 10, 12, 14, 12, 10])[0]
     w = random.uniform(0.14, 0.34)
     return {"kind": kind, "x": random.uniform(0.2, 0.8), "y": random.uniform(0.2, 0.8),
             "w": w, "h": w * random.uniform(0.45, 1.0),
@@ -366,6 +396,13 @@ def random_city(plan: str | None = None, palette: str | None = None) -> CityGeno
     g.plazas = [_new_plaza() for _ in range(random.choices([0, 1, 2], weights=[65, 25, 10])[0])]
     # Start fairly plain: structure is grown by evolution (``complexify``).
     g.complexes = [_new_complex() for _ in range(random.choices([0, 1], weights=[60, 40])[0])]
+    if random.random() < 0.5:
+        g.prims = [random.choice(PRIM_KINDS)]
+        g.prim_share = random.uniform(0.04, 0.12)
+    if random.random() < 0.45:
+        g.relief = random.uniform(0.35, 0.9)
+    g.view = random.choice([-60.0, -120.0, -45.0, -135.0]) + random.gauss(0, 6)
+    g.tonal = random.choice([0.0, 0.0, random.uniform(0.2, 0.6)])
     return g
 
 
@@ -414,6 +451,16 @@ def complexify(g: CityGenome) -> None:
     rivers = [w for w in g.waters if w.get("kind") == "river"]
     if rivers:
         opts += ["bridge", "island"]
+    if len(g.prims) < len(PRIM_KINDS):
+        opts += ["prim"] * 3
+    if g.prims and g.prim_share < 0.35:
+        opts += ["prim_share"] * 2
+    if g.relief < 1.4:
+        opts += ["relief"] * 2
+    if g.tonal < 0.7:
+        opts += ["tonal"]
+    if len(g.complexes) < MAX_COMPLEXES:
+        opts += ["round_complex"] * 2
     if not opts:
         return
     op = random.choice(opts)
@@ -446,6 +493,17 @@ def complexify(g: CityGenome) -> None:
     elif op == "island":
         w = random.choice(rivers)
         w["island"] = True
+    elif op == "prim":
+        g.prims.append(random.choice([k for k in PRIM_KINDS if k not in g.prims]))
+        g.prim_share = max(g.prim_share, 0.06)
+    elif op == "prim_share":
+        g.prim_share = min(0.35, g.prim_share + random.uniform(0.03, 0.08))
+    elif op == "relief":
+        g.relief = min(1.4, max(0.3, g.relief + random.uniform(0.15, 0.3)))
+    elif op == "tonal":
+        g.tonal = min(0.7, g.tonal + random.uniform(0.1, 0.2))
+    elif op == "round_complex":
+        g.complexes.append(_new_complex(random.choice(ROUND_KINDS)))
 
 
 # ----------------------------------------------------------------------
@@ -561,6 +619,12 @@ def mutate_city(g: CityGenome, strength: float = 1.0, temp: float = 1.0) -> None
             g.water_color = _new_water_color(g)
         elif roll < 0.97:
             _mutate_complex(g, s)
+        elif roll < 0.975 and (g.relief > 0 or g.tonal > 0):
+            g.view = (g.view + random.gauss(0, 15 * s) + 180) % 360 - 180
+            if g.relief > 0:
+                g.relief = gauss(g.relief, 0.15, 0.2, 1.4)
+            if g.tonal > 0:
+                g.tonal = gauss(g.tonal, 0.1, 0.0, 0.7)
         elif roll < 0.985 and g.zones:
             z = random.choice(g.zones)
             z["x"] = _clamp(z["x"] + random.gauss(0, 0.06 * s), 0.0, 1.0)
@@ -652,6 +716,11 @@ def crossover_city(a: CityGenome, b: CityGenome) -> CityGenome:
     child.zones = _deep_copy((za + zb)[:MAX_ZONES])
     child.orn_kinds = list(dict.fromkeys(a.orn_kinds + b.orn_kinds))
     child.ornament = max(a.ornament, b.ornament)
+    child.prims = list(dict.fromkeys(a.prims + b.prims))
+    child.prim_share = max(a.prim_share, b.prim_share)
+    src3 = random.choice([a, b])
+    child.relief, child.view = src3.relief, src3.view
+    child.tonal = max(a.tonal, b.tonal)
     return child
 
 
@@ -944,6 +1013,62 @@ def _lots_split(poly: Poly, ang: float, target: float, f: _Fill,
             _lots_split(half, ang, target, f, out, level + 1)
 
 
+def _circle(cx: float, cy: float, rx: float, ry: float, u: tuple, a0: float = 0.0,
+            a1: float = 2 * math.pi, k: int = 28) -> Poly:
+    v = (-u[1], u[0])
+    pts = []
+    for i in range(k + 1 if a1 - a0 < 2 * math.pi - 1e-6 else k):
+        t = a0 + (a1 - a0) * i / k
+        x, y = rx * math.cos(t), ry * math.sin(t)
+        pts.append((cx + u[0] * x + v[0] * y, cy + u[1] * x + v[1] * y))
+    return pts
+
+
+def _primitive(poly: Poly, kind: str, ang: float, rng: random.Random) -> tuple[Poly, str]:
+    """Turn a lot into a non-rectangular building: rotunda, half-round,
+    triangle, oval, ring, notched L or a quarter-round wedge."""
+    u = (math.cos(ang), math.sin(ang))
+    v = (-u[1], u[0])
+    u0, u1 = _extent(poly, *u)
+    v0, v1 = _extent(poly, *v)
+    if abs(_area(poly)) < 0.8 * (u1 - u0) * (v1 - v0):
+        return poly, "lot"                     # only on (nearly) whole rectangles
+    um, vm = (u0 + u1) / 2, (v0 + v1) / 2
+    hu, hv = (u1 - u0) / 2, (v1 - v0) / 2
+
+    def P(a, b):
+        return (u[0] * a + v[0] * b, u[1] * a + v[1] * b)
+
+    cx, cy = P(um, vm)
+    if kind in ("disc", "ring"):
+        r = min(hu, hv) * 0.96
+        return _circle(cx, cy, r, r, u), kind
+    if kind == "ellipse":
+        return _circle(cx, cy, hu * 0.97, hv * 0.97, u), "lot"
+    if kind == "semi":
+        r = min(hu, hv * 2) * 0.97
+        flip = rng.random() < 0.5
+        bx, by = P(um, v0 if not flip else v1)
+        a0 = 0.0 if not flip else math.pi
+        return _circle(bx, by, r, r, u, a0, a0 + math.pi, 24), "lot"
+    if kind == "wedge":
+        corner = rng.randrange(4)
+        cu, cv, a0 = ((u0, v0, 0.0), (u1, v0, math.pi / 2), (u1, v1, math.pi),
+                      (u0, v1, 1.5 * math.pi))[corner]
+        r = min(2 * hu, 2 * hv) * 0.97
+        bx, by = P(cu, cv)
+        return [(bx, by)] + _circle(bx, by, r, r, u, a0, a0 + math.pi / 2, 12), "lot"
+    if kind == "tri":
+        c = rng.randrange(4)
+        corners = [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)]
+        del corners[c]
+        return _ccw(corners), "lot"
+    # notch: an L-shaped block
+    fu, fv = rng.uniform(0.35, 0.6), rng.uniform(0.35, 0.6)
+    nu, nv = u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv
+    return [P(u0, v0), P(u1, v0), P(u1, nv), P(nu, nv), P(nu, v1), P(u0, v1)], "lot"
+
+
 def express_city(g: CityGenome, domain=(0.0, 0.0, 1.0, 1.0)) -> list[Lot]:
     """Genes -> painted lots (deterministic)."""
     dom = (domain[0] - DOMAIN_PAD, domain[1] - DOMAIN_PAD,
@@ -1002,6 +1127,12 @@ def express_city(g: CityGenome, domain=(0.0, 0.0, 1.0, 1.0)) -> list[Lot]:
             if z["kind"] == "tint" and z.get("color", -1) != g.ground:
                 dw[z["color"] % N_COLORS] = max(dw[z["color"] % N_COLORS], 1.0) * 4.0
         prev = -1
+        if g.prims and g.prim_share > 0:
+            prng = random.Random(g.seed * 7 + d_i * 131)
+            unit2 = (lot_size * 0.9) ** 2
+            shapes = [_primitive(pl, prng.choice(g.prims), ang, prng)
+                      if kd != "slab" and abs(_area(pl)) > unit2 and prng.random() < g.prim_share
+                      else (pl, kd) for pl, kd in shapes]
         for poly, kind in shapes:
             w = list(dw)
             if kind in ("solid", "slab"):
@@ -1061,6 +1192,33 @@ def _visible(p, margin: float = 0.02) -> bool:
 # ----------------------------------------------------------------------
 # Rendering
 # ----------------------------------------------------------------------
+
+_SHADOW = (118, 98, 86)          # warm umber glaze for cast shadows
+_WALL_DARK = (26, 22, 20)
+
+
+def _mixc(a, b, t: float) -> tuple[int, int, int]:
+    return tuple(int(round(x + (y - x) * t)) for x, y in zip(a, b))
+
+
+def _hull(pts: Poly) -> Poly:
+    pts = sorted(set(pts))
+    if len(pts) < 3:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lo, hi = [], []
+    for p in pts:
+        while len(lo) >= 2 and cross(lo[-2], lo[-1], p) <= 0:
+            lo.pop()
+        lo.append(p)
+    for p in reversed(pts):
+        while len(hi) >= 2 and cross(hi[-2], hi[-1], p) <= 0:
+            hi.pop()
+        hi.append(p)
+    return lo[:-1] + hi[:-1]
+
 
 def _pigment(rgb: tuple[float, float, float]) -> tuple[int, int, int]:
     return tuple(int(round(c * 255)) for c in rgb)
@@ -1123,15 +1281,69 @@ def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
         poly([(c[0] + t[0] * sa * a + n[0] * sb * b, c[1] + t[1] * sa * a + n[1] * sb * b)
               for sa, sb in ((-1, -1), (1, -1), (1, 1), (-1, 1))], fill)
 
-    # 1. Lots.
+    # 1. Lots: a flat plan, or lifted into blocks seen obliquely under one
+    # light (hard flat shadows, walls a darker shade of their own colour).
     orng = random.Random(g.seed ^ 0x9E3779B9)
+    trng = random.Random(g.color_seed ^ 0x1234567)
     lot_unit = max(0.0085, g.lot * z)
-    for lot in express_city(g, domain):
+    lots = express_city(g, domain)
+    colours = []
+    for lot in lots:
         c = _vary(col(lot.color), rng, 0.035)
-        poly(lot.poly, c)
-        if g.orn_kinds and lot.kind != "slab" and orng.random() < g.ornament:
-            _ornament(lot, orng.choice(g.orn_kinds), orng, g, col, poly, ground,
-                      dark_on, street, lot_unit, side, draw, px)
+        if g.tonal > 0:                       # light and dark tones of a hue
+            t = trng.uniform(-1, 1) * g.tonal * 0.32
+            c = _mixc(c, (250, 246, 236), t) if t > 0 else _mixc(c, (18, 17, 18), -t)
+        colours.append(c)
+
+    if g.relief > 0 and lots:
+        va = math.radians(g.view)
+        ev = (math.cos(va), math.sin(va))                  # roofs lift this way
+        sa = va + math.radians(80)
+        sv = (math.cos(sa), math.sin(sa))                  # shadows fall this way
+        hrng = random.Random(g.seed ^ 0x51ED27)
+        heights = []
+        for lot in lots:
+            f = min(3.5, math.exp(hrng.gauss(0, 0.55)))
+            f *= {"solid": 1.8, "slab": 1.3, "disc": 1.7, "ring": 1.5}.get(lot.kind, 1.0)
+            heights.append(f * g.relief * lot_unit * 0.85)
+        mask = Image.new("L", img.size, 0)
+        md = ImageDraw.Draw(mask)
+        for lot, h in zip(lots, heights):
+            pts = list(lot.poly) + [(x + sv[0] * h, y + sv[1] * h) for x, y in lot.poly]
+            md.polygon([px(p) for p in _hull(pts)], fill=150)
+        img.paste(Image.composite(ImageChops.multiply(img, Image.new("RGB", img.size, _SHADOW)),
+                                  img, mask))
+        order = sorted(range(len(lots)), key=lambda i: -sum(
+            x * ev[0] + y * ev[1] for x, y in lots[i].poly) / len(lots[i].poly))
+        for i in order:
+            lot, h, c = lots[i], heights[i], colours[i]
+            base = lot.poly if _area(lot.poly) >= 0 else lot.poly[::-1]
+            dx, dy = ev[0] * h, ev[1] * h
+            for k in range(len(base)):
+                a, b = base[k], base[(k + 1) % len(base)]
+                nx, ny = b[1] - a[1], -(b[0] - a[0])           # outward (CCW)
+                ln = math.hypot(nx, ny) or 1.0
+                nx, ny = nx / ln, ny / ln
+                if nx * ev[0] + ny * ev[1] >= 0:
+                    continue                                 # hidden behind the roof
+                lit = max(0.0, -(nx * sv[0] + ny * sv[1]))
+                wall = _mixc(c, _WALL_DARK, 0.5 - 0.32 * lit)
+                poly([a, b, (b[0] + dx, b[1] + dy), (a[0] + dx, a[1] + dy)], wall)
+            roof = Lot([(x + dx, y + dy) for x, y in lot.poly], lot.color, lot.kind)
+            poly(roof.poly, c)
+            if lot.kind == "ring":
+                _ring_well(roof, _mixc(c, _WALL_DARK, 0.55), poly)
+            if g.orn_kinds and lot.kind != "slab" and orng.random() < g.ornament:
+                _ornament(roof, orng.choice(g.orn_kinds), orng, g, col, poly, ground,
+                          dark_on, street, lot_unit, side, draw, px)
+    else:
+        for lot, c in zip(lots, colours):
+            poly(lot.poly, c)
+            if lot.kind == "ring":
+                _ring_well(lot, ground, poly)
+            if g.orn_kinds and lot.kind != "slab" and orng.random() < g.ornament:
+                _ornament(lot, orng.choice(g.orn_kinds), orng, g, col, poly, ground,
+                          dark_on, street, lot_unit, side, draw, px)
 
     # 2. Ring-and-radial avenues.
     if g.plan == "radial" and g.hub:
@@ -1300,6 +1512,13 @@ def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
         img = img.resize((width, height), Image.LANCZOS)
     return img
 
+def _ring_well(lot: Lot, fill, poly) -> None:
+    p = lot.poly
+    cx = sum(q[0] for q in p) / len(p)
+    cy = sum(q[1] for q in p) / len(p)
+    poly([(cx + (x - cx) * 0.5, cy + (y - cy) * 0.5) for x, y in p], fill)
+
+
 def _ornament(lot: Lot, kind: str, rng: random.Random, g: CityGenome, col, poly,
               ground, dark_on: int, street: float, unit: float, side: int, draw, px) -> None:
     """Inner detail of one building: a light-well, a two-tone roof, roof
@@ -1403,7 +1622,14 @@ def _draw_complex(c: dict, g: CityGenome, col, poly, stroke, bar, ground, water,
     dark = dark_on
     kind = c.get("kind", "courtyard")
     elab = int(c.get("elab", 0))
-    rect(-W - street, W + street, -H - street, H + street, ground)   # the site
+    if kind in ("circus", "gasworks", "planetarium"):
+        H = W = max(W, H) if kind != "gasworks" else W
+        if kind == "gasworks":
+            rect(-W - street, W + street, -H - street, H + street, ground)
+        else:
+            ell(0, 0, W + street, H + street, ground)
+    else:
+        rect(-W - street, W + street, -H - street, H + street, ground)   # the site
     if elab >= 3:
         # A forecourt band and a frame of small pavilions around the site.
         k = max(4, int((W + H) / (street * 6)))
@@ -1589,6 +1815,81 @@ def _draw_complex(c: dict, g: CityGenome, col, poly, stroke, bar, ground, water,
                      -t[1] * math.sin(ang) + n[1] * math.cos(ang)),
                     r * 0.8, r * 0.28, col(A))
             ell(ru, rv, r * 0.7, r * 0.7, col(g.lead))
+
+    elif kind == "circus":
+        # Concentric rings of wedge-shaped buildings around a round square.
+        rings = rng.randint(2, 3) + (1 if elab >= 2 else 0)
+        r_in = W * rng.uniform(0.25, 0.38)
+        dr = (W - r_in) / rings
+        rays = rng.choice([4, 6, 8])
+        for k in range(rings):
+            r0, r1 = r_in + k * dr + street * 0.6, r_in + (k + 1) * dr - street * 0.6
+            m = rays * max(1, int(round((r0 + r1) * math.pi / rays / (dr * 1.6))))
+            for i in range(m):
+                a0 = 2 * math.pi * i / m + street / max(r0, 1e-3)
+                a1 = 2 * math.pi * (i + 1) / m - street / max(r0, 1e-3)
+                if a1 <= a0:
+                    continue
+                arc = [(r1 * math.cos(a0 + (a1 - a0) * j / 6), r1 * math.sin(a0 + (a1 - a0) * j / 6))
+                       for j in range(7)]
+                arc += [(r0 * math.cos(a1 - (a1 - a0) * j / 6), r0 * math.sin(a1 - (a1 - a0) * j / 6))
+                        for j in range(7)]
+                poly([L(u, v) for u, v in arc], col(pick()))
+        for i in range(rays):                               # radial streets
+            a_ = 2 * math.pi * (i + 0.5) / rays
+            line((r_in * 0.9 * math.cos(a_), r_in * 0.9 * math.sin(a_)),
+                 (W * math.cos(a_), W * math.sin(a_)), street * 1.6, ground)
+        ell(0, 0, r_in * 0.7, r_in * 0.7, col(g.lead))
+        if elab >= 1:
+            ell(0, 0, r_in * 0.3, r_in * 0.3, col(dark))
+        if elab >= 3:
+            ring_line(0, 0, r_in * 0.5, r_in * 0.5, thin, ground)
+
+    elif kind == "gasworks":
+        # Gas-holders: big round tanks with guide frames, joined by pipes.
+        n_h = rng.randint(2, 4) + (1 if elab >= 2 else 0)
+        A, B = pick(), pick()
+        centres = []
+        for i in range(n_h):
+            r = min(W, H) * rng.uniform(0.35, 0.6) * (0.75 if n_h > 3 else 1.0)
+            u = -W + r + (2 * W - 2 * r) * (i / max(1, n_h - 1)) if n_h > 1 else 0.0
+            v = rng.uniform(-H + r, H - r) if H > r else 0.0
+            centres.append((u, v, r))
+        for (u0_, v0_), (u1_, v1_) in zip([c_[:2] for c_ in centres], [c_[:2] for c_ in centres[1:]]):
+            line((u0_, v0_), (u1_, v1_), thin * 2.2, col(dark))
+        for u, v, r in centres:
+            ell(u, v, r, r, col(A))
+            ring_line(u, v, r * 0.82, r * 0.82, thin * 1.2, ground)
+            ell(u, v, r * 0.62, r * 0.62, col(B if B != A else g.lead))
+            ell(u, v, r * 0.16, r * 0.16, col(g.lead))
+            if elab >= 1:                                   # guide-frame columns
+                for k in range(12):
+                    a_ = 2 * math.pi * k / 12
+                    ell(u + r * 1.06 * math.cos(a_), v + r * 1.06 * math.sin(a_),
+                        thin * 2, thin * 2, col(dark), k=8)
+
+    elif kind == "planetarium":
+        # A painted dome: stacked discs stepping toward the light.
+        r = W * 0.62
+        base_c = col(g.lead)
+        steps = 6
+        for i in range(steps):
+            f = 1 - i / (steps + 1)
+            off = r * 0.07 * i
+            ell(-off, -off, r * f, r * f, _mixc(base_c, (250, 246, 236), 0.11 * i))
+        ring_line(0, 0, r * 1.12, r * 1.12, thin * 1.5, col(dark))
+        th = r * 0.22
+        rect(-W, W, r * 1.25, r * 1.25 + th, col(pick(g.lead)))       # a long wing
+        if elab >= 1:
+            ell(W * 0.72, -W * 0.7, r * 0.22, r * 0.22, col(dark))    # observatory
+        if elab >= 2:
+            for k in range(8):                                        # meridians
+                a_ = math.pi * k / 8
+                line((-r * math.cos(a_), -r * math.sin(a_)),
+                     (r * math.cos(a_), r * math.sin(a_)), thin * 0.6,
+                     _mixc(base_c, _WALL_DARK, 0.35))
+        if elab >= 3:
+            ring_line(0, 0, r * 1.3, r * 1.3, thin, col(g.lead))
 
     else:                                                   # park
         pc = green()
