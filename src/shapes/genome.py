@@ -84,12 +84,17 @@ class Shape:
     depth: float = 0.0       # 3D cuboid depth (0 = flat 2D shape)
     elevation: float = 0.0   # Height in 3D stack
     detail: str = "none"     # Architectural detail pattern on face
+    bleed: bool = False      # may run off the sheet (not fitted inside)
+    stacked: bool = False    # stands on another block (expression-only, not saved)
+    float_gap: float = 0.0   # rare: hovers this far above what's below; the
+                             # renderer paints a hard shadow to show the gap
 
     def copy(self) -> Shape:
         return Shape(
             self.kind, self.x, self.y, self.w, self.h,
             self.rotation, self.color_idx, self.opacity, self.material,
-            self.depth, self.elevation, self.detail,
+            self.depth, self.elevation, self.detail, self.bleed, self.stacked,
+            self.float_gap,
         )
 
     def to_dict(self) -> dict:
@@ -105,6 +110,8 @@ class Shape:
             d["elevation"] = self.elevation
         if self.detail != "none":
             d["detail"] = self.detail
+        if self.bleed:
+            d["bleed"] = True
         return d
 
     @classmethod
@@ -118,7 +125,7 @@ class Shape:
             color_idx=d["color_idx"], opacity=d.get("opacity", 1.0),
             material=material,
             depth=d.get("depth", 0.0), elevation=d.get("elevation", 0.0),
-            detail=d.get("detail", "none"),
+            detail=d.get("detail", "none"), bleed=d.get("bleed", False),
         )
 
 
@@ -172,6 +179,13 @@ def _comp_from_dict(d: dict | None):
     return CompGenome.from_dict(d)
 
 
+def _city_from_dict(d: dict | None):
+    if not d:
+        return None
+    from src.shapes.citymap import CityGenome
+    return CityGenome.from_dict(d)
+
+
 @dataclass
 class ShapeGenome:
     groups: list[ShapeGroup] = field(default_factory=list)
@@ -201,6 +215,9 @@ class ShapeGenome:
     # Composition genes (src/shapes/composition.CompGenome) for Hadid mode;
     # when set, the shapes above are an expression of these genes.
     comp: object = None
+    # City-plan genes (src/shapes/citymap.CityGenome) for Maps mode; when
+    # set, the map is painted from these genes and groups/satellites are empty.
+    city: object = None
 
     def flatten(self) -> list[Shape]:
         """Return all shapes in rendering order (back-to-front)."""
@@ -243,6 +260,7 @@ class ShapeGenome:
             density_falloff=self.density_falloff,
             engine_tag=self.engine_tag,
             comp=self.comp.copy() if self.comp is not None else None,
+            city=self.city.copy() if self.city is not None else None,
         )
 
     def to_dict(self) -> dict:
@@ -274,6 +292,8 @@ class ShapeGenome:
             d["engine_tag"] = self.engine_tag
         if self.comp is not None:
             d["comp"] = self.comp.to_dict()
+        if self.city is not None:
+            d["city"] = self.city.to_dict()
         return d
 
     @classmethod
@@ -302,7 +322,8 @@ class ShapeGenome:
                        focal_y=d.get("focal_y", 0.40),
                        density_falloff=d.get("density_falloff", 0.5),
                        engine_tag=d.get("engine_tag", ""),
-                       comp=_comp_from_dict(d.get("comp")))
+                       comp=_comp_from_dict(d.get("comp")),
+                       city=_city_from_dict(d.get("city")))
         # Backward compat: old flat format with "shapes" key
         shapes = [Shape.from_dict(s) for s in d.get("shapes", [])]
         if not shapes:
@@ -2223,435 +2244,9 @@ def architecton_harmony(genome: ShapeGenome) -> float:
 # Map creation (abstract city-plan compositions)
 # ======================================================================
 
-def create_map(num_palette_colors: int = 12) -> ShapeGenome:
-    """Create an abstract city-plan genome inspired by Lutyens' Delhi.
-
-    Nearly flat plan view.  Thin road lines form a connected network;
-    large flat building blocks and gardens fill the spaces between
-    roads densely.  Minimal depth/elevation — just enough for subtle
-    relief.
-    """
-    groups: list[ShapeGroup] = []
-    satellites: list[Shape] = []
-
-    palette_size = min(num_palette_colors, random.randint(6, 10))
-    sub_indices = random.sample(range(num_palette_colors), palette_size)
-
-    # Indices into MAPS_PALETTE:
-    # 0=off_white 1=charcoal 2=silver 3=signal_red 4=cobalt_blue
-    # 5=orange 6=white 7=ochre_yellow 8=deep_red 9=cool_grey
-    # 10=pale_blue 11=graphite
-    road_colors = [i for i in [2, 1, 8] if i < num_palette_colors] or [0]
-    garden_colors = [i for i in [10, 4] if i < num_palette_colors] or [0]
-    building_colors = [i for i in [3, 5, 6, 4, 9] if i < num_palette_colors] or sub_indices[:3]
-    monument_colors = [i for i in [7, 3, 6] if i < num_palette_colors] or sub_indices[:2]
-    bg_candidates = [i for i in [1, 11, 0] if i < num_palette_colors] or [0]
-
-    _BK = ["rect", "rect", "rect", "lshape", "tshape", "cross",
-           "hexagon", "square", "trapezoid"]
-
-    scene_style = random.choices(
-        ["axial_plan", "radial_plan", "grid_plan", "hexagonal_plan"],
-        weights=[35, 25, 25, 15],
-    )[0]
-
-    if scene_style == "axial_plan":
-        map_armature = random.uniform(-5, 5)
-        map_focal_x = random.uniform(0.42, 0.58)
-        map_focal_y = 0.5
-    elif scene_style == "radial_plan":
-        map_armature = random.uniform(0, 360)
-        map_focal_x = random.uniform(0.40, 0.60)
-        map_focal_y = random.uniform(0.40, 0.60)
-    elif scene_style == "grid_plan":
-        map_armature = random.uniform(-12, 12)
-        map_focal_x = random.uniform(0.38, 0.62)
-        map_focal_y = random.uniform(0.38, 0.62)
-    else:
-        map_armature = random.uniform(0, 60)
-        map_focal_x = random.uniform(0.42, 0.58)
-        map_focal_y = random.uniform(0.42, 0.58)
-    map_density_falloff = random.uniform(0.15, 0.45)
-
-    # Flat 2D plan view — no 3D projection at all
-    camera_mode = 0
-    proj_angle = 30.0
-    proj_strength = 0.0
-    proj2_angle = -35.0
-    proj2_strength = 0.0
-    vanish_x = 0.5
-    vanish_y = 0.5
-    perspective_bias = 0.0
-
-    _MAP_MIN = 0.003
-
-    # ---- flat factory helpers ----
-    def _road(x, y, length, width, angle):
-        s = Shape(kind="rect", x=_clamp01(x), y=_clamp01(y),
-                  w=_clamp(length, _MAP_MIN, MAX_SIZE),
-                  h=_clamp(width, _MAP_MIN, MAX_SIZE),
-                  rotation=angle % 360,
-                  color_idx=random.choice(road_colors),
-                  opacity=random.uniform(0.85, 1.0), material="concrete",
-                  depth=0.0, elevation=0.0)
-        _ensure_inside(s)
-        return s
-
-    def _rb(x1, y1, x2, y2, w=0.005):
-        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-        return _road(mx, my, math.hypot(x2 - x1, y2 - y1) + 0.004, w,
-                     math.degrees(math.atan2(y2 - y1, x2 - x1)))
-
-    def _bldg(x, y, w, h, angle):
-        s = Shape(kind=random.choices(_BK, weights=[20, 20, 20, 8, 6, 5, 6, 8, 7])[0],
-                  x=_clamp01(x), y=_clamp01(y),
-                  w=_clamp(w, _MAP_MIN, MAX_SIZE),
-                  h=_clamp(h, _MAP_MIN, MAX_SIZE),
-                  rotation=angle % 360,
-                  color_idx=random.choice(building_colors),
-                  opacity=random.uniform(0.88, 1.0), material="concrete",
-                  depth=0.0, elevation=0.0)
-        _ensure_inside(s)
-        return s
-
-    def _park(x, y, w, h, angle):
-        s = Shape(kind=random.choice(["rect", "ellipse", "rect"]),
-                  x=_clamp01(x), y=_clamp01(y),
-                  w=_clamp(w, _MAP_MIN, MAX_SIZE),
-                  h=_clamp(h, _MAP_MIN, MAX_SIZE),
-                  rotation=angle % 360,
-                  color_idx=random.choice(garden_colors),
-                  opacity=random.uniform(0.70, 0.90), material="marble",
-                  depth=0.0, elevation=0.0)
-        _ensure_inside(s)
-        return s
-
-    def _mon(x, y, size, angle):
-        s = Shape(kind=random.choice(["cross", "hexagon", "circle", "square"]),
-                  x=_clamp01(x), y=_clamp01(y),
-                  w=_clamp(size, _MAP_MIN, MAX_SIZE),
-                  h=_clamp(size * random.uniform(0.85, 1.0), _MAP_MIN, MAX_SIZE),
-                  rotation=angle % 360,
-                  color_idx=random.choice(monument_colors),
-                  opacity=1.0, material="marble",
-                  depth=0.0, elevation=0.0)
-        _ensure_inside(s)
-        return s
-
-    def _ag(shapes, cx, cy, angle):
-        if shapes and len(groups) < MAX_GROUPS:
-            groups.append(ShapeGroup(
-                anchor=shapes[0], members=shapes[1:],
-                cx=_clamp01(cx), cy=_clamp01(cy), angle=angle))
-
-    # ==================================================================
-    # AXIAL PLAN  (Lutyens' Delhi reference)
-    # ==================================================================
-    if scene_style == "axial_plan":
-        ax_cx = random.uniform(0.44, 0.56)
-        ax_a = random.uniform(-5, 5)
-        ar = math.radians(ax_a)
-        aco, asi = math.cos(ar), math.sin(ar)
-        # perpendicular unit
-        pco, psi = -asi, aco
-
-        # Central ceremonial avenue
-        satellites.append(_road(ax_cx, 0.5, 0.88, 0.008, ax_a))
-        # Flanking secondary lanes
-        for side in [-1, 1]:
-            off = random.uniform(0.025, 0.04)
-            satellites.append(
-                _road(ax_cx + side * off * pco, 0.5 + side * off * psi,
-                      0.82, 0.004, ax_a))
-
-        # Cross-streets at regular intervals
-        n_cross = random.randint(5, 9)
-        cross_ys: list[float] = []
-        for i in range(n_cross):
-            t = (i + 0.5) / n_cross
-            cy = 0.06 + t * 0.88
-            cross_ys.append(cy)
-            cw = random.uniform(0.35, 0.90)
-            satellites.append(_road(ax_cx, cy, cw, 0.005, ax_a + 90))
-
-        # Grand monument at one terminus
-        mon_cy = random.choice([0.06, 0.94])
-        satellites.append(_mon(ax_cx, mon_cy, random.uniform(0.06, 0.10), ax_a))
-        for side in [-1, 1]:
-            satellites.append(
-                _bldg(ax_cx + side * random.uniform(0.06, 0.10), mon_cy,
-                      random.uniform(0.04, 0.07), random.uniform(0.03, 0.05),
-                      ax_a))
-            satellites.append(
-                _rb(ax_cx, mon_cy,
-                    ax_cx + side * 0.10, mon_cy, w=0.004))
-
-        # Dense buildings + parks flanking the axis between cross-streets
-        for i in range(len(cross_ys) - 1):
-            yt, yb = cross_ys[i], cross_ys[i + 1]
-            yc = (yt + yb) / 2
-            span_y = yb - yt
-            for side in [-1, 1]:
-                # Near-axis garden
-                gx = ax_cx + side * random.uniform(0.04, 0.08)
-                satellites.append(
-                    _park(gx, yc, random.uniform(0.04, 0.08),
-                          span_y * random.uniform(0.55, 0.80), ax_a))
-
-                # Building blocks in 2-3 bands
-                for band in range(random.randint(2, 3)):
-                    bx = ax_cx + side * (0.10 + band * random.uniform(0.07, 0.12))
-                    bw = random.uniform(0.05, 0.10)
-                    bh = span_y * random.uniform(0.50, 0.85)
-                    satellites.append(_bldg(bx, yc, bw, bh, ax_a + random.gauss(0, 2)))
-                    # Side-street connecting this block back to axis
-                    satellites.append(_rb(bx, yc, ax_cx, yc, w=0.004))
-
-                    # Sub-blocks within larger blocks
-                    if random.random() < 0.5:
-                        for _ in range(random.randint(1, 3)):
-                            sx = bx + random.gauss(0, bw * 0.3)
-                            sy = yc + random.gauss(0, bh * 0.3)
-                            satellites.append(
-                                _bldg(sx, sy, bw * random.uniform(0.25, 0.45),
-                                      bh * random.uniform(0.2, 0.4),
-                                      ax_a + random.gauss(0, 3)))
-
-        # Diagonal avenues radiating from key intersections
-        for _ in range(random.randint(3, 6)):
-            da = ax_a + random.choice([30, 45, 60, -30, -45, -60])
-            dr = math.radians(da)
-            oy = random.choice(cross_ys)
-            dlen = random.uniform(0.18, 0.40)
-            ex = _clamp01(ax_cx + dlen * math.cos(dr))
-            ey = _clamp01(oy + dlen * math.sin(dr))
-            satellites.append(_rb(ax_cx, oy, ex, ey, w=0.005))
-            satellites.append(
-                _bldg(ex, ey, random.uniform(0.03, 0.06),
-                      random.uniform(0.02, 0.04), da))
-
-        # Outer residential blocks
-        for _ in range(random.randint(8, 16)):
-            bx = _clamp01(ax_cx + random.choice([-1, 1]) * random.uniform(0.30, 0.46))
-            by = random.uniform(0.08, 0.92)
-            satellites.append(
-                _bldg(bx, by, random.uniform(0.03, 0.07),
-                      random.uniform(0.02, 0.05),
-                      ax_a + random.choice([0, 90]) + random.gauss(0, 5)))
-
-    # ==================================================================
-    # RADIAL PLAN
-    # ==================================================================
-    elif scene_style == "radial_plan":
-        hx = random.uniform(0.40, 0.60)
-        hy = random.uniform(0.40, 0.60)
-        n_boul = random.randint(6, 10)
-        spin = random.uniform(0, 360)
-        hub_r = random.uniform(0.020, 0.035)
-
-        satellites.append(_mon(hx, hy, hub_r * 2.5, 0))
-
-        boul_angles: list[float] = []
-        for i in range(n_boul):
-            adeg = spin + 360.0 * i / n_boul + random.gauss(0, 2)
-            boul_angles.append(adeg)
-            arad = math.radians(adeg)
-            blen = random.uniform(0.30, 0.46)
-            ex = _clamp01(hx + math.cos(arad) * blen)
-            ey = _clamp01(hy + math.sin(arad) * blen)
-            satellites.append(_rb(hx, hy, ex, ey, w=0.006))
-
-        # Concentric ring roads
-        n_rings = random.randint(2, 5)
-        ring_radii: list[float] = []
-        for ri in range(1, n_rings + 1):
-            rr = hub_r * 2.5 + ri * random.uniform(0.05, 0.09)
-            ring_radii.append(rr)
-            n_seg = 24
-            pts = [(_clamp01(hx + rr * math.cos(2 * math.pi * s / n_seg)),
-                     _clamp01(hy + rr * math.sin(2 * math.pi * s / n_seg)))
-                    for s in range(n_seg)]
-            for s in range(n_seg):
-                p1, p2 = pts[s], pts[(s + 1) % n_seg]
-                satellites.append(_rb(p1[0], p1[1], p2[0], p2[1], w=0.004))
-
-        # Fill sectors between boulevards and rings with buildings/parks
-        for bi in range(n_boul):
-            a1 = math.radians(boul_angles[bi])
-            a2 = math.radians(boul_angles[(bi + 1) % n_boul])
-            mid_a = (a1 + a2) / 2.0
-            sector_span = abs(a2 - a1)
-            for rr in ring_radii:
-                bx = _clamp01(hx + math.cos(mid_a) * rr)
-                by = _clamp01(hy + math.sin(mid_a) * rr)
-                arc_w = rr * sector_span * 0.6
-                is_park = random.random() < 0.20
-                bw = _clamp(arc_w, 0.04, 0.10)
-                bh = random.uniform(0.03, 0.07)
-                if is_park:
-                    satellites.append(
-                        _park(bx, by, bw, bh, math.degrees(mid_a)))
-                else:
-                    satellites.append(
-                        _bldg(bx, by, bw, bh,
-                              math.degrees(mid_a) + random.gauss(0, 5)))
-                # Infill buildings in the wedge
-                for _ in range(random.randint(1, 3)):
-                    ja = random.uniform(a1, a2)
-                    jr = rr * random.uniform(0.7, 1.2)
-                    satellites.append(
-                        _bldg(_clamp01(hx + math.cos(ja) * jr),
-                              _clamp01(hy + math.sin(ja) * jr),
-                              random.uniform(0.025, 0.055),
-                              random.uniform(0.020, 0.045),
-                              math.degrees(ja) + random.gauss(0, 8)))
-
-        # Secondary roundabouts at boulevard ends
-        for adeg in boul_angles[:random.randint(3, n_boul)]:
-            arad = math.radians(adeg)
-            r_end = ring_radii[-1] if ring_radii else 0.25
-            ex = _clamp01(hx + math.cos(arad) * r_end)
-            ey = _clamp01(hy + math.sin(arad) * r_end)
-            satellites.append(_mon(ex, ey, random.uniform(0.012, 0.022), 0))
-
-    # ==================================================================
-    # GRID PLAN
-    # ==================================================================
-    elif scene_style == "grid_plan":
-        gcx = random.uniform(0.38, 0.62)
-        gcy = random.uniform(0.38, 0.62)
-        ga = random.uniform(-12, 12)
-        gar = math.radians(ga)
-        gac, gas = math.cos(gar), math.sin(gar)
-        rows = random.randint(5, 9)
-        cols = random.randint(5, 9)
-        sx = random.uniform(0.07, 0.11)
-        sy = random.uniform(0.06, 0.09)
-        x0 = gcx - (cols - 1) * sx / 2.0
-        y0 = gcy - (rows - 1) * sy / 2.0
-
-        # Horizontal streets
-        rg: list[Shape] = []
-        for r in range(rows + 1):
-            ay = y0 - sy * 0.5 + r * sy
-            rg.append(_road(gcx, ay, cols * sx + 0.04,
-                            0.005 if r % 3 != 0 else 0.008, ga))
-        _ag(rg, gcx, gcy, ga)
-
-        # Vertical streets
-        rg2: list[Shape] = []
-        for c in range(cols + 1):
-            ax = x0 - sx * 0.5 + c * sx
-            rg2.append(_road(ax, gcy,
-                             0.005 if c % 3 != 0 else 0.008,
-                             rows * sy + 0.04, ga))
-        _ag(rg2, gcx, gcy, ga)
-
-        # Diagonals
-        for _ in range(random.randint(1, 3)):
-            da = ga + random.choice([30, 45, -30, -45])
-            satellites.append(_road(gcx, gcy, random.uniform(0.30, 0.65), 0.006, da))
-
-        # City blocks
-        for r in range(rows):
-            for c in range(cols):
-                bx = x0 + c * sx
-                by = y0 + r * sy
-                is_park = random.random() < 0.15
-                bw = sx * random.uniform(0.55, 0.88)
-                bh = sy * random.uniform(0.55, 0.88)
-                if is_park:
-                    satellites.append(_park(bx, by, bw, bh, ga))
-                else:
-                    satellites.append(_bldg(bx, by, bw, bh, ga + random.gauss(0, 2)))
-                    if random.random() < 0.50:
-                        for _ in range(random.randint(1, 2)):
-                            ox = random.uniform(-0.3, 0.3) * bw
-                            oy = random.uniform(-0.3, 0.3) * bh
-                            satellites.append(
-                                _bldg(bx + ox * gac - oy * gas,
-                                      by + ox * gas + oy * gac,
-                                      bw * random.uniform(0.25, 0.45),
-                                      bh * random.uniform(0.25, 0.45),
-                                      ga + random.gauss(0, 3)))
-
-        # Monuments
-        for _ in range(random.randint(1, 3)):
-            mx = x0 + random.randint(0, cols - 1) * sx
-            my = y0 + random.randint(0, rows - 1) * sy
-            satellites.append(_mon(mx, my, random.uniform(0.04, 0.08), ga))
-
-    # ==================================================================
-    # HEXAGONAL PLAN
-    # ==================================================================
-    else:
-        hcx = random.uniform(0.42, 0.58)
-        hcy = random.uniform(0.42, 0.58)
-        n_rings = random.randint(2, 4)
-        hspin = random.uniform(0, 60)
-
-        satellites.append(_mon(hcx, hcy, random.uniform(0.035, 0.055), 0))
-
-        for ring in range(1, n_rings + 1):
-            radius = ring * random.uniform(0.09, 0.13)
-            pts = [(_clamp01(hcx + math.cos(math.radians(hspin + v * 60)) * radius),
-                     _clamp01(hcy + math.sin(math.radians(hspin + v * 60)) * radius))
-                    for v in range(6)]
-
-            for v in range(6):
-                p1, p2 = pts[v], pts[(v + 1) % 6]
-                satellites.append(_rb(p1[0], p1[1], p2[0], p2[1], w=0.005))
-            for vx, vy in pts:
-                satellites.append(_rb(hcx, hcy, vx, vy, w=0.004))
-
-            for v in range(6):
-                vx, vy = pts[v]
-                p2 = pts[(v + 1) % 6]
-                mx, my = (vx + p2[0]) / 2, (vy + p2[1]) / 2
-                is_park = random.random() < 0.22
-                bw = random.uniform(0.04, 0.08)
-                bh = random.uniform(0.035, 0.07)
-                if is_park:
-                    satellites.append(_park(vx, vy, bw, bh, hspin + v * 60))
-                else:
-                    satellites.append(_bldg(vx, vy, bw, bh, hspin + v * 60 + random.gauss(0, 3)))
-                satellites.append(
-                    _bldg(mx, my, random.uniform(0.035, 0.065),
-                          random.uniform(0.030, 0.055),
-                          hspin + v * 60 + 30 + random.gauss(0, 3)))
-                # Infill between ring and inner ring
-                if ring > 1:
-                    ir = (ring - 0.5) * random.uniform(0.09, 0.13)
-                    mid_a = math.radians(hspin + v * 60 + 30)
-                    ix = _clamp01(hcx + math.cos(mid_a) * ir)
-                    iy = _clamp01(hcy + math.sin(mid_a) * ir)
-                    satellites.append(
-                        _bldg(ix, iy, random.uniform(0.03, 0.06),
-                              random.uniform(0.025, 0.05),
-                              hspin + v * 60 + 30 + random.gauss(0, 5)))
-
-    # --- Background ---
-    bg_style = random.choices([2, 2, 6, 1], weights=[40, 20, 20, 20])[0]
-    bg_idx = random.choice(bg_candidates)
-    bg_sec_idx = random.choice([i for i in sub_indices if i != bg_idx] or sub_indices)
-
-    genome = ShapeGenome(
-        groups=groups, satellites=satellites,
-        bg_style=bg_style, bg_color_idx=bg_idx,
-        bg_angle=random.uniform(0, 360),
-        bg_cx=random.uniform(0.25, 0.75), bg_cy=random.uniform(0.25, 0.75),
-        bg_sec_idx=bg_sec_idx,
-        bg_blend=random.uniform(0.01, 0.08) if random.random() < 0.3 else 0.0,
-        projection_angle=proj_angle, projection_strength=proj_strength,
-        projection_secondary_angle=proj2_angle,
-        projection_secondary_strength=proj2_strength,
-        projection_vanishing_x=vanish_x, projection_vanishing_y=vanish_y,
-        camera_mode=camera_mode, perspective_bias=perspective_bias,
-        armature_angle=map_armature,
-        focal_x=map_focal_x, focal_y=map_focal_y,
-        density_falloff=map_density_falloff,
-        engine_tag="maps",
-    )
-    for shape in genome.flatten():
-        _ensure_inside(shape)
-    return genome
+def create_map(num_palette_colors: int = 21, plan: str | None = None,
+               palette: str | None = None) -> ShapeGenome:
+    """Create an abstract city-map genome (see src/shapes/citymap.py)."""
+    from src.shapes.citymap import random_city, PAPER
+    return ShapeGenome(bg_color_idx=PAPER, engine_tag="maps",
+                       city=random_city(plan, palette))

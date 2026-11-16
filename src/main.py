@@ -407,7 +407,7 @@ def _run_hadid(args):
 
 
 def _run_maps(args):
-    """Run the Maps abstract city-plan 3D evolution mode."""
+    """Run the Maps abstract city-map evolution mode."""
     from src.shapes.population import ShapePopulation
     from src.shapes.renderer import render_genome, render_population_grid
 
@@ -429,7 +429,7 @@ def _run_maps(args):
     else:
         pop.initialize_maps()
 
-    print(f"=== Maps 3D City-Plan Evolution ===")
+    print(f"=== Maps City-Map Evolution ===")
     print(f"Engine: maps | Population: {args.pop_size}")
     print()
 

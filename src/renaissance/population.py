@@ -1,0 +1,79 @@
+"""Interactive population for the Renaissance engine.
+
+Same interface as ShapePopulation (genomes, generation, temperature(),
+evolve_with_selection, save_genome) so the server drives both alike.
+
+Breeding: the user's picks survive; each open slot is filled by breeding a
+few sibling candidates from the picks and keeping the one the
+compositional prior likes best.  Early generations are hot (big changes,
+fresh random scenes mixed in); the lineage cools as it goes so later
+generations refine rather than wander.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+from pathlib import Path
+
+from src.renaissance.genome import (
+    SceneGenome, composition_score, create_random, crossover, mutate,
+)
+
+CANDIDATES = 3
+NEWCOMERS = 3            # at full heat; scaled by temperature
+COOLING = 0.9
+WARM_GENERATIONS = 2
+MIN_TEMP = 0.2
+
+
+class RenaissancePopulation:
+    def __init__(self, config: dict | None = None):
+        cfg = config or {}
+        self.pop_size: int = cfg.get("pop_size", 24)
+        self.elitism: int = cfg.get("elitism", 2)
+        self.crossover_rate: float = cfg.get("crossover_rate", 0.7)
+        self.mutation_strength: float = cfg.get("mutation_strength", 1.0)
+        self.refine: float | None = cfg.get("refine")
+        self.genomes: list[SceneGenome] = []
+        self.generation: int = 0
+
+    def initialize(self) -> None:
+        self.genomes = [create_random() for _ in range(self.pop_size)]
+        self.generation = 0
+
+    def temperature(self) -> float:
+        if self.refine is not None:
+            return max(MIN_TEMP, 1.0 - max(0.0, min(1.0, self.refine)))
+        return max(MIN_TEMP, COOLING ** max(0, self.generation - WARM_GENERATIONS))
+
+    def _child(self, parents: list[SceneGenome], temp: float) -> SceneGenome:
+        if len(parents) >= 2 and random.random() < self.crossover_rate:
+            a, b = random.sample(parents, 2)
+            child = crossover(a, b)
+        else:
+            child = random.choice(parents).copy()
+        mutate(child, self.mutation_strength, temp)
+        return child
+
+    def evolve_with_selection(self, selected: list[int]) -> None:
+        parents = [self.genomes[i] for i in selected if 0 <= i < len(self.genomes)]
+        if not parents:
+            parents = [random.choice(self.genomes)]
+        temp = self.temperature()
+        keep = [p.copy() for p in parents[: max(self.elitism, len(parents))]][: self.pop_size]
+        n_new = min(int(round(NEWCOMERS * temp)), max(0, self.pop_size - len(keep) - 1))
+        children = []
+        while len(keep) + len(children) < self.pop_size - n_new:
+            cands = [self._child(parents, temp) for _ in range(CANDIDATES)]
+            children.append(max(cands, key=composition_score))
+        fresh = [create_random() for _ in range(n_new)]
+        self.genomes = (keep + children + fresh)[: self.pop_size]
+        self.generation += 1
+
+    def save_genome(self, index: int, path: str | Path) -> None:
+        Path(path).write_text(json.dumps(self.genomes[index].to_dict(), indent=2))
+
+    @staticmethod
+    def load_genome(path: str | Path) -> SceneGenome:
+        return SceneGenome.from_dict(json.loads(Path(path).read_text()))

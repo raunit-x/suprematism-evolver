@@ -9,6 +9,7 @@ A Picbreeder-style interactive evolution system for generating abstract art. Use
 - **Shapes engine** (default): Evolves explicit geometric primitives (Suprematist style) with hierarchical ShapeGroup/satellite structure
 - **CPPN engine**: Evolves neural networks (CPPN + NEAT) that map pixel coordinates to colors
 - **Hadid engine**: 3D architecton variant of shapes with oblique cuboid projection
+- **Renaissance engine** (`src/renaissance/`): sacred-scene genome (setting, one-point perspective, light, draped figures drawn from compositional priors) plus a small NEAT CPPN for cloud/fold/terrain fields; rendered as underpainting + Kubelka-Munk pigment mixing and glazes. Runs through `shape_pop` like the shapes engines (`SHAPE_ENGINES` in `server.py`); `render_pool` dispatches on `genome.engine_tag == "renaissance"`
 
 ## Commands
 

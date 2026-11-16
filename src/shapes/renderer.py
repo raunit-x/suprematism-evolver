@@ -229,7 +229,7 @@ def _inset_polygon(pts: list[tuple[float, float]], scale: float) -> list[tuple[f
 
 def _get_shape_corners(kind: str, pw: float, ph: float) -> list[tuple[float, float]]:
     hw, hh = pw / 2.0, ph / 2.0
-    if kind in ("circle", "ellipse"):
+    if kind in ("circle", "ellipse", "cylinder"):
         n = 40
         return [(hw * math.cos(2 * math.pi * k / n), hh * math.sin(2 * math.pi * k / n))
                 for k in range(n)]
@@ -492,16 +492,33 @@ _PLASTER_WHITE = (238, 233, 222)
 _UMBER = (58, 47, 40)           # shade pigment for faces turned from the light
 _PAPER = (222, 208, 180)        # aged paper / primed canvas
 _GRAPHITE = (72, 68, 64)
+_LIGHT_IVORY = (247, 240, 222)  # the one light every lit face shares
+_SHADE_TAUPE = (96, 80, 70)     # the one shade every shaded face shares
+
+# How far the 3D ground sits behind the structure (0 = on the same plane).
+# Painted, not optical: ground fields are mixed toward the ground tone
+# (lower value and chroma than the forms), laid flat (no relief plates),
+# and shadows that reach the ground land detached and lighter.
+GROUND_RECESSION = 0.85
+GROUND_DROP = 0.075              # extra height above the ground, in canvas units
+
+
+def _recede(rgb: tuple[int, int, int], ground: tuple[int, int, int],
+            ease: float) -> tuple[int, int, int]:
+    """A ground-field colour pushed back: its own ease toward the ground
+    plus the recession share of what is left."""
+    return _mix(rgb, ground, ease + (1.0 - ease) * GROUND_RECESSION * 0.6)
 
 
 def _period_pigment(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Map a palette colour to a 1920s pigment: ~12% less saturated, warmer,
-    blacks lifted to warm lamp-black and whites settled to ivory."""
+    """Map a palette colour to a period pigment: barely desaturated (primaries
+    stay strong, as in Hadid's Tektonik), a touch warmer, blacks a deep
+    lamp-black and whites a clean ivory."""
     r, g, b = rgb
     lum = 0.299 * r + 0.587 * g + 0.114 * b
-    r, g, b = (x + (lum - x) * 0.12 for x in (r, g, b))
-    r, g, b = _mix((int(r), int(g), int(b)), (214, 196, 160), 0.05)
-    lo, hi = (30, 27, 25), (242, 237, 224)
+    r, g, b = (x + (lum - x) * 0.03 for x in (r, g, b))
+    r, g, b = _mix((int(r), int(g), int(b)), (214, 196, 160), 0.03)
+    lo, hi = (17, 16, 18), (247, 244, 236)
     return tuple(int(l + (h - l) * x / 255.0) for x, l, h in zip((r, g, b), lo, hi))
 
 
@@ -510,20 +527,23 @@ def _mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[in
 
 
 def _face_shade(base: tuple[int, int, int], nx: float, ny: float) -> tuple[int, int, int]:
-    """Lambert-style shade for a side face with 2D outward normal (nx, ny).
+    """Painted value for a side face with 2D outward normal (nx, ny).
 
-    The front face (facing the viewer) keeps the base colour; side faces
-    turned toward the light get lighter, those turned away fall into a
-    cool, desaturated shade.
+    One light for the whole picture, as in Lissitzky's Prouns: every face
+    turned to the light moves toward the same warm ivory, every face turned
+    away toward the same warm umber.  Shared light and shade colours are
+    what make differently coloured blocks sit together in one space.
+    The roof (front face) keeps the block's own colour.
     """
     n = math.hypot(nx, ny) or 1.0
     d = (nx * _LIGHT_DIR[0] + ny * _LIGHT_DIR[1]) / n
-    # Painted, not rendered: three or so flat values per form.
-    if d >= 0.35:
-        return _lighten(base, 0.16)
-    if d >= -0.2:
-        return _darken(base, 0.10)
-    return _mix(_darken(base, 0.30), _UMBER, 0.22)
+    # Walls keep their own hue (a darker red is still red); the shared light
+    # and shade only tint them, so colour never turns to mud.
+    if d >= 0.35:                                   # lit wall
+        return _mix(base, _LIGHT_IVORY, 0.26)
+    if d >= -0.2:                                   # half shade
+        return _mix(_darken(base, 0.28), _SHADE_TAUPE, 0.06)
+    return _mix(_darken(base, 0.54), _SHADE_TAUPE, 0.10)   # deep shade
 
 
 def _noise_image(size: tuple[int, int], cells: int, octaves: int = 3,
@@ -589,6 +609,76 @@ def _stroke_relief_tile(bucket: int) -> Image.Image:
     return Image.fromarray(np.clip(128 + relief, 0, 255).astype(np.uint8), "L")
 
 
+OIL_STRENGTH = 0.45    # broken-colour brushwork on every form and the ground
+_LOAD_CACHE: dict[tuple[int, int], np.ndarray] = {}
+
+
+def _stroke_load_tile(bucket: int) -> np.ndarray:
+    """Paint load of overlapping oil strokes in one direction: where the
+    brush was full the paint is a touch lighter and richer, where it dragged
+    a touch thinner.  Zero-mean float32 in about [-1, 1], seamless."""
+    rng = _py_random.Random(4471 + bucket)
+    size = _STROKE_TILE
+    img = Image.new("L", (size, size), 128)
+    draw = ImageDraw.Draw(img)
+    base = math.radians(bucket * 15.0)
+    # Hopper, not Van Gogh: long, broad, smoothly laid strokes of nearly
+    # the same value, so a plane reads as clean paint with a quiet trace of
+    # the brush.
+    for _ in range(420):
+        cx, cy = rng.uniform(0, size), rng.uniform(0, size)
+        length, width = rng.uniform(90, 260), rng.randint(16, 34)
+        ang = base + math.radians(rng.gauss(0, 3))
+        dx, dy = math.cos(ang) * length / 2, math.sin(ang) * length / 2
+        v = int(_clamp(rng.gauss(128, 22), 60, 196))
+        for ox in (-size, 0, size):
+            for oy in (-size, 0, size):
+                draw.line([(cx - dx + ox, cy - dy + oy), (cx + dx + ox, cy + dy + oy)],
+                          fill=v, width=width)
+    a = np.asarray(img.filter(ImageFilter.GaussianBlur(3.5)), dtype=np.float32)
+    return (a - a.mean()) / 64.0
+
+
+def _load_field(size: tuple[int, int], angle_deg: float, canvas_scale: int,
+                scale: float = 1.0) -> np.ndarray:
+    bucket = int(round((angle_deg % 180.0) / 15.0)) % 12
+    tile_px = max(96, int(_STROKE_TILE * canvas_scale / 1024 * 0.75 * scale))
+    key = (bucket, tile_px)
+    tile = _LOAD_CACHE.get(key)
+    if tile is None:
+        t = _stroke_load_tile(bucket)
+        if tile_px != _STROKE_TILE:
+            im = Image.fromarray(((t + 2) * 63.75).clip(0, 255).astype(np.uint8), "L")
+            t = np.asarray(im.resize((tile_px, tile_px), Image.BICUBIC),
+                           dtype=np.float32) / 63.75 - 2
+        if len(_LOAD_CACHE) > 36:
+            _LOAD_CACHE.clear()
+        _LOAD_CACHE[key] = t
+        tile = t
+    w, h = size
+    ox, oy = _py_random.randrange(tile_px), _py_random.randrange(tile_px)
+    reps_y, reps_x = (h + oy) // tile_px + 2, (w + ox) // tile_px + 2
+    big = np.tile(tile, (reps_y, reps_x))
+    return big[oy:oy + h, ox:ox + w]
+
+
+def _oil_paint(arr: np.ndarray, angle_deg: float, canvas_scale: int, amount: float,
+               scale: float = 1.0) -> np.ndarray:
+    """Broken colour, in place on an (h, w, 3) float array: value follows the
+    paint load of each stroke, and each channel drifts a little on its own
+    so neighbouring strokes differ slightly in hue, as oil never lies as
+    one flat colour."""
+    if amount <= 0:
+        return arr
+    h, w = arr.shape[:2]
+    load = _load_field((w, h), angle_deg, canvas_scale, scale)
+    arr += (load * np.float32(9.0 * amount))[..., None]
+    for c in range(3):
+        drift = _load_field((w, h), angle_deg + 4, canvas_scale, scale * 0.8)
+        arr[..., c] += drift * np.float32(1.2 * amount)
+    return arr
+
+
 def _impasto_field(size: tuple[int, int], angle_deg: float, canvas_scale: int,
                    strength: float) -> Image.Image:
     """Relief texture covering ``size``; stroke size tracks the canvas so the
@@ -634,21 +724,149 @@ _MATERIAL_TEXTURE = {
 }
 
 
-def _texture_element(layer: Image.Image, shape: Shape) -> None:
-    """Give one element its own faint surface, in place: a light brush relief
-    following the element's orientation plus a soft tonal mottle with its own
-    random phase, so neighbouring blocks never share one continuous texture."""
+def _tooth(h: int, w: int, ref: int) -> np.ndarray:
+    """Zero-mean paint/paper tooth, (h, w) float32, unit amplitude; grains
+    sized (~2 output px) to survive the supersample downscale."""
+    cell = max(1, int(round(ref / 700)))
+    small = np.random.default_rng().standard_normal(
+        (max(1, h // cell), max(1, w // cell))).astype(np.float32)
+    noise = Image.fromarray(((small + 4) * 32).clip(0, 255).astype(np.uint8), "L")
+    return np.asarray(noise.resize((w, h), Image.BILINEAR), dtype=np.float32) / 32 - 4
+
+
+def _texture_element(layer: Image.Image, shape: Shape, grain: float = 8.0) -> None:
+    """Give one element its own surface, in place: a brush relief following
+    the element's orientation, a tonal mottle with its own random phase, and
+    a fine paint tooth.  The Grain setting scales all three, so neighbouring
+    blocks never share one continuous texture and the slider is visible on
+    the forms, not only on the paper."""
     bbox = layer.getbbox()
     if bbox is None:
         return
+    k = 0.5 + max(0.0, grain) / 6.0           # grain 0 -> 0.5x, 8 -> 1.8x, 25 -> 4.7x
     relief, mottle_amp = _MATERIAL_TEXTURE.get(shape.material, _MATERIAL_TEXTURE["concrete"])
     angle = shape.rotation + _py_random.gauss(0, 4)
-    _apply_impasto(layer, angle, relief, bbox)
+    _apply_impasto(layer, angle, min(0.9, relief * k + 0.03 * OIL_STRENGTH), bbox)
     region = layer.crop(bbox)
-    mottle = _noise_image(region.size, cells=3, octaves=3, amp=mottle_amp)
+    mottle = _noise_image(region.size, cells=3, octaves=3, amp=min(0.3, mottle_amp * k))
     rgb = ImageChops.soft_light(region.convert("RGB"), Image.merge("RGB", (mottle,) * 3))
+    if OIL_STRENGTH > 0:
+        arr = _oil_paint(np.asarray(rgb, dtype=np.float32), angle, min(layer.size),
+                         OIL_STRENGTH)
+        rgb = Image.fromarray(arr.clip(0, 255).astype(np.uint8), "RGB")
+    if grain > 0:
+        arr = np.asarray(rgb, dtype=np.float32)
+        tooth = _tooth(arr.shape[0], arr.shape[1], min(layer.size))
+        arr += (tooth * np.float32(grain * 0.9))[..., None]
+        rgb = Image.fromarray(arr.clip(0, 255).astype(np.uint8), "RGB")
     rgb.putalpha(region.getchannel("A"))
     layer.paste(rgb, bbox[:2])
+
+
+def _sweep_mask(mask: Image.Image, dx: int, dy: int) -> Image.Image:
+    """Union of ``mask`` shifted by every offset from (0, 0) to (dx, dy):
+    doubling, so it is exact at any length in ~log2(length) steps."""
+    covered, total = 0, max(abs(dx), abs(dy), 1)
+    while covered < total:
+        step = min(covered + 1, total - covered)
+        sx, sy = int(round(dx * step / total)), int(round(dy * step / total))
+        moved = Image.new("L", mask.size, 0)
+        moved.paste(mask, (sx, sy))
+        mask = ImageChops.lighter(mask, moved)
+        covered += step
+    return mask
+
+
+def _shift_mask(mask: Image.Image, dx: int, dy: int) -> Image.Image:
+    out = Image.new("L", mask.size, 0)
+    out.paste(mask, (dx, dy))
+    return out
+
+
+def _shadow_dir() -> tuple[float, float]:
+    lx, ly = _LIGHT_DIR
+    n = math.hypot(lx, ly) or 1.0
+    return -lx / n, -ly / n
+
+
+def _paint_cast_shadow(base: Image.Image, layer: Image.Image, shape: Shape,
+                       iw: int, ih: int, gap: float = 0.0, far: bool = False) -> None:
+    """A Proun-style cast shadow, in place on ``base``: the volume of the
+    form swept away from the light onto whatever lies beneath it.  ``gap``
+    is how far the form's foot stands above that surface: a form standing
+    on it casts a shadow from its foot; a form held high casts one that
+    lands detached, further off, so the height between levels reads.
+    Painted as a darker value of the surface it falls on.  Hard-edged."""
+    bbox = layer.getbbox()
+    if bbox is None:
+        return
+    ux, uy = _shadow_dir()
+    size = min(iw, ih)
+    near = _clamp(gap * 0.9, 0.0, 0.2) * size
+    far = near + _clamp(shape.depth * 0.9, 0.007, 0.14) * size
+    nx, ny = int(round(ux * near)), int(round(uy * near))
+    fx, fy = int(round(ux * far)), int(round(uy * far))
+    x0, y0 = max(0, min(bbox[0], bbox[0] + fx)), max(0, min(bbox[1], bbox[1] + fy))
+    x1, y1 = min(iw, max(bbox[2], bbox[2] + fx)), min(ih, max(bbox[3], bbox[3] + fy))
+    if x1 <= x0 or y1 <= y0:
+        return
+    m = layer.getchannel("A").crop((x0, y0, x1, y1))
+    if nx or ny:
+        m = _shift_mask(m, nx, ny)
+    sweep = _sweep_mask(m, fx - nx, fy - ny)
+    sweep = sweep.point(lambda v: 255 if v > 110 else 0)       # one hard edge
+    if shape.material == "glass":
+        sweep = sweep.point(lambda v: v // 2)
+    region = base.crop((x0, y0, x1, y1))
+    a = region.getchannel("A")
+    rgb = region.convert("RGB")
+    k = 0.50 + (0.16 * GROUND_RECESSION / 0.55 if far else 0.0)   # far ground: a lighter shadow
+    shade = Image.blend(rgb.point(lambda v: int(v * k)),
+                        Image.new("RGB", region.size, _SHADE_TAUPE), 0.10)
+    out = Image.composite(shade, rgb, sweep)
+    out.putalpha(a)
+    base.paste(out, (x0, y0))
+
+
+def _paint_relief(sheet: Image.Image, top: Image.Image, level: int, unit: float,
+                  pdir: tuple[float, float]) -> None:
+    """Paint a ground field (``top``, RGBA, full size) onto ``sheet`` at a
+    relief ``level``: raised plates show a wall along the depth axis and
+    cast a hard shadow on the ground; a sunken field carries a shadow band
+    inside its light-facing rim.  Level 0 is simply laid flat."""
+    mask = top.getchannel("A").point(lambda v: 255 if v > 127 else 0)
+    if level == 0:
+        sheet.alpha_composite(top)
+        return
+    ux, uy = _shadow_dir()
+    h = abs(level) * unit
+    if level > 0:
+        sx, sy = int(round(ux * h * 1.2)), int(round(uy * h * 1.2))
+        shadow = _sweep_mask(mask, sx, sy)
+        rgb = sheet.convert("RGB")
+        dark = Image.blend(rgb.point(lambda v: int(v * 0.58)),
+                           Image.new("RGB", rgb.size, _SHADE_TAUPE), 0.08)
+        rgb = Image.composite(dark, rgb, shadow)
+        wx, wy = int(round(pdir[0] * h)), int(round(pdir[1] * h))
+        wall = _sweep_mask(mask, wx, wy)
+        tone = top.convert("RGB").point(lambda v: int(v * 0.66))
+        # Spread the field colour into its wall by sweeping the coloured
+        # top too, then darken: walls keep each field's own hue.
+        wall_rgb = Image.new("RGB", rgb.size)
+        steps = max(1, min(32, abs(wx) + abs(wy)))
+        for k in range(steps, 0, -1):
+            ox, oy = int(round(wx * k / steps)), int(round(wy * k / steps))
+            wall_rgb.paste(tone, (ox, oy), _shift_mask(mask, ox, oy) if (ox or oy) else mask)
+        rgb = Image.composite(wall_rgb, rgb, wall)
+        rgb = Image.composite(top.convert("RGB"), rgb, mask)
+        sheet.paste(rgb.convert("RGBA"), (0, 0))
+        return
+    sheet.alpha_composite(top)
+    d = int(round(h * 1.2))
+    inner = ImageChops.subtract(mask, _shift_mask(mask, int(round(ux * d)), int(round(uy * d))))
+    rgb = sheet.convert("RGB")
+    dark = rgb.point(lambda v: int(v * 0.6))
+    sheet.paste(Image.composite(dark, rgb, inner).convert("RGBA"), (0, 0))
 
 
 def _hand_edge(layer: Image.Image) -> None:
@@ -698,19 +916,67 @@ def _glassify(layer: Image.Image) -> Image.Image:
     return out
 
 
+def _paint_float_shadow(stack: Image.Image, layer: Image.Image, shape: Shape,
+                        genome: ShapeGenome, iw: int, ih: int) -> None:
+    """The rare floating element: a flat, hard-edged painted shadow of its
+    roof dropped onto whatever lies below (never onto the bare ground), so
+    the gap between them reads.  Not an airbrushed drop shadow."""
+    px, py = _projection_vector(shape, iw, ih, genome)
+    drop = (shape.depth + shape.float_gap) * min(iw, ih)
+    dx, dy = int(round(px * drop)), int(round(py * drop))
+    shadow = Image.new("L", (iw, ih), 0)
+    shadow.paste(layer.getchannel("A"), (dx, dy))
+    mask = ImageChops.multiply(shadow, stack.getchannel("A")).point(lambda v: int(v * 0.42))
+    tone = Image.new("RGBA", (iw, ih), _SHADE_TAUPE + (0,))
+    tone.putalpha(mask)
+    a = stack.getchannel("A")
+    stack.alpha_composite(tone)
+    stack.putalpha(a)
+
+
+def _ground_rgb(genome: ShapeGenome, palette: list[tuple]) -> tuple[int, int, int]:
+    base = _period_pigment(_palette_rgb(palette, genome.bg_color_idx))
+    lum = 0.299 * base[0] + 0.587 * base[1] + 0.114 * base[2]
+    return _mix(base, _PAPER, 0.45 if lum > 150 else 0.06)
+
+
 def _build_stack_3d(genome: ShapeGenome, iw: int, ih: int,
-                    palette: list[tuple]) -> Image.Image:
-    """Render all cuboids back-to-front with inter-object shadows."""
+                    palette: list[tuple], base: Image.Image | None = None,
+                    grain: float = 8.0) -> Image.Image:
+    """Render all forms back-to-front (painter's algorithm by height), each
+    with its own depth cue: the top of its roof relative to the
+    composition's lowest and highest roofs.  Painted onto ``base`` (the
+    ground) when given, so cast shadows can fall on it."""
     shapes = genome.flatten()
     shapes.sort(key=lambda s: s.elevation)
-    stack = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
+    stack = base if base is not None else Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
+    ground = _ground_rgb(genome, palette)
+    tops = [s.elevation for s in shapes if not s.bleed]
+    lo, hi = (min(tops), max(tops)) if tops else (0.0, 0.0)
+    from src.shapes.composition import _plan_overlap
+    drawn: list[Shape] = []
     for shape in shapes:
-        layer = _render_cuboid_layer(shape, iw, ih, palette, genome)
+        cue = 0.0 if hi - lo < 1e-3 else _clamp(2 * (shape.elevation - lo) / (hi - lo) - 1, -1, 1)
+        layer = _render_cuboid_layer(shape, iw, ih, palette, genome, cue, ground)
+        if base is not None:
+            # Height of this form's foot above whatever is really beneath it
+            # (a lower roof, or the ground): the shadow lands that far off.
+            foot = shape.elevation - shape.depth
+            below = max((o.elevation for o in drawn
+                         if o.elevation <= foot + 1e-4 and _plan_overlap(o, shape) > 1e-6),
+                        default=0.0)
+            on_ground = below <= 1e-6
+            drop = GROUND_DROP * GROUND_RECESSION / 0.55 if on_ground else 0.0
+            _paint_cast_shadow(stack, layer, shape, iw, ih, max(0.0, foot - below) + drop,
+                               far=on_ground and GROUND_RECESSION > 0)
+        elif shape.float_gap > 0 and stack.getbbox() is not None:
+            _paint_float_shadow(stack, layer, shape, genome, iw, ih)
+        drawn.append(shape)
         _hand_edge(layer)
         if shape.material == "glass":
             layer = _glassify(layer)
         else:
-            _texture_element(layer, shape)
+            _texture_element(layer, shape, grain)
         _composite_layer(stack, layer)
     return stack
 
@@ -731,12 +997,11 @@ def _paint_ground(canvas: Image.Image, genome: ShapeGenome, palette: list[tuple]
     or one muted pigment), optionally divided by one or two large flat
     planes, carrying its own faint paper tooth.  No gradients."""
     w, h = canvas.size
-    base = _period_pigment(_palette_rgb(palette, genome.bg_color_idx))
-    lum = 0.299 * base[0] + 0.587 * base[1] + 0.114 * base[2]
-    ground = _mix(base, _PAPER, 0.80 if lum > 150 else 0.12)
+    ground = _ground_rgb(genome, palette)
     sheet = Image.new("RGBA", (w, h), ground + (255,))
 
-    plane_rgb = _mix(_period_pigment(_palette_rgb(palette, genome.bg_sec_idx)), ground, 0.55)
+    plane_pure = _period_pigment(_palette_rgb(palette, genome.bg_sec_idx))
+    plane_rgb = _recede(plane_pure, ground, 0.35)
     draw = ImageDraw.Draw(sheet)
     ext = float(max(w, h)) * 3.0
     cx, cy = genome.bg_cx * w, genome.bg_cy * h
@@ -748,24 +1013,132 @@ def _paint_ground(canvas: Image.Image, genome: ShapeGenome, palette: list[tuple]
                       (cx - ux * ext + px * ext, cy - uy * ext + py * ext),
                       (cx + ux * ext + px * ext, cy + uy * ext + py * ext)],
                      fill=plane_rgb + (255,))
+    if genome.bg_style == 8:
+        # A great curved field (Hadid, "Malevich's Tektonik"): the edge of a
+        # huge disc centred off the sheet, with a narrow pale rim.
+        a = math.radians(genome.bg_angle)
+        big = float(max(w, h))
+        ccx, ccy = w * 0.5 + math.cos(a) * big * 0.95, h * 0.5 + math.sin(a) * big * 0.95
+        rad = big * 1.02
+        rim = _recede(_period_pigment(_palette_rgb(palette, 15 if len(palette) > 15 else 2)), ground, 0.0)
+        band = big * 0.045
+        level = 0 if GROUND_RECESSION > 0 else int(getattr(getattr(genome, "comp", None), "ground_level", 0) or 0)
+        top = Image.new("RGBA", (w, h), (0, 0, 0, 0)) if level else None
+        d2 = ImageDraw.Draw(top) if top is not None else draw
+        d2.ellipse([ccx - rad - band, ccy - rad - band, ccx + rad + band, ccy + rad + band],
+                   fill=rim + (255,))
+        d2.ellipse([ccx - rad, ccy - rad, ccx + rad, ccy + rad], fill=_recede(plane_pure, ground, 0.1) + (255,))
+        if top is not None:
+            unit, pdir = _ground_relief_axes(genome, w, h)
+            _paint_relief(sheet, top, level, unit * 1.4, pdir)
     if genome.bg_style in (3, 7):
         # A second, narrower plane crossing the first.
         a2 = ang + math.radians(90 if genome.bg_style == 7 else 34)
         ux, uy = math.cos(a2), -math.sin(a2)
         px, py = -uy, ux
         band = max(w, h) * 0.16
-        sec = _mix(_period_pigment(_palette_rgb(palette, (genome.bg_sec_idx + 2) % len(palette))),
-                   ground, 0.60)
+        sec = _recede(_period_pigment(_palette_rgb(palette, (genome.bg_sec_idx + 2) % len(palette))),
+                      ground, 0.60)
         draw.polygon([(cx + ux * ext, cy + uy * ext), (cx - ux * ext, cy - uy * ext),
                       (cx - ux * ext + px * band, cy - uy * ext + py * band),
                       (cx + ux * ext + px * band, cy + uy * ext + py * band)],
                      fill=sec + (255,))
 
+    _paint_marks(draw, genome, palette, ground, w, h, sheet)
+
     # Paper tooth (fibres + a little grain) and very soft uneven wash.
     rgb = _apply_finish(sheet.convert("RGB"), 5.0, grain * 0.5, 0.0)
     wash = _noise_image((w, h), cells=4, octaves=3, amp=0.06)
     rgb = ImageChops.soft_light(rgb, Image.merge("RGB", (wash,) * 3))
+    if OIL_STRENGTH > 0:
+        # Broad, quieter strokes laid across the ground in its own direction.
+        arr = _oil_paint(np.asarray(rgb, dtype=np.float32), genome.bg_angle + 90.0,
+                         min(w, h), OIL_STRENGTH * 0.5, scale=2.2)
+        rgb = Image.fromarray(arr.clip(0, 255).astype(np.uint8), "RGB")
+    if grain > 0:
+        # The ground is painted too: same tooth as the forms, a touch finer.
+        arr = np.asarray(rgb, dtype=np.float32)
+        arr += (_tooth(h, w, min(w, h)) * np.float32(grain * 0.7))[..., None]
+        rgb = Image.fromarray(arr.clip(0, 255).astype(np.uint8), "RGB")
     canvas.paste(rgb.convert("RGBA"), (0, 0))
+
+
+def _ground_relief_axes(genome: ShapeGenome, w: int, h: int) -> tuple[float, tuple[float, float]]:
+    """(px per relief step, unit depth direction) for ground plates."""
+    from types import SimpleNamespace
+    px, py = _projection_vector(SimpleNamespace(x=0.5, y=0.5), w, h, genome)
+    n = math.hypot(px, py) or 1.0
+    return min(w, h) * 0.011, (px / n, py / n)
+
+
+def _paint_marks(draw: ImageDraw.ImageDraw, genome: ShapeGenome, palette: list[tuple],
+                 ground: tuple[int, int, int], w: int, h: int,
+                 sheet: Image.Image | None = None) -> None:
+    """Flat ground primitives from the composition genes (wedges, bands,
+    discs, then Malevich lines on top).  Fields are eased a little toward
+    the ground so they sit behind the structure; lines stay pure."""
+    comp = getattr(genome, "comp", None)
+    marks = getattr(comp, "marks", None) or []
+    if not marks:
+        return
+    sz = float(min(w, h))
+
+    def col(mk, ease):
+        c = _period_pigment(_palette_rgb(palette, int(mk.get("color", 5))))
+        return _recede(c, ground, ease) + (255,)
+
+    def bar(mk, width, length, offset=0.0):
+        a = math.radians(mk.get("angle", 0.0))
+        ux, uy = math.cos(a), math.sin(a)
+        px, py = -uy, ux
+        cx = mk["x"] * w + px * offset
+        cy = mk["y"] * h + py * offset
+        hl, hw = length * sz / 2, width / 2
+        return [(cx - ux * hl - px * hw, cy - uy * hl - py * hw),
+                (cx + ux * hl - px * hw, cy + uy * hl - py * hw),
+                (cx + ux * hl + px * hw, cy + uy * hl + py * hw),
+                (cx - ux * hl + px * hw, cy - uy * hl + py * hw)]
+
+    order = {"triangle": 0, "band": 1, "disc": 2, "line": 3}
+    unit, pdir = _ground_relief_axes(genome, w, h)
+    real_draw = draw
+    # Lower plates first, raised ones over them, lines on top.
+    for mk in sorted(marks, key=lambda mk: (order.get(mk.get("kind"), 9) == 3,
+                                            mk.get("level", 0),
+                                            order.get(mk.get("kind"), 9))):
+        kind = mk.get("kind")
+        level = int(mk.get("level", 0)) if kind != "line" and GROUND_RECESSION <= 0 else 0
+        top = None
+        if level and sheet is not None:
+            top = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(top)
+        else:
+            draw = real_draw
+        if kind == "triangle":
+            a = math.radians(mk.get("angle", 0.0))
+            half = math.radians(mk.get("spread", 30.0) / 2)
+            ln = mk.get("length", 1.0) * sz
+            ax, ay = mk["x"] * w, mk["y"] * h
+            pts = [(ax, ay),
+                   (ax + math.cos(a - half) * ln, ay + math.sin(a - half) * ln),
+                   (ax + math.cos(a + half) * ln, ay + math.sin(a + half) * ln)]
+            draw.polygon(pts, fill=col(mk, 0.18))
+        elif kind == "disc":
+            rr = mk.get("radius", 0.15) * sz
+            cx, cy = mk["x"] * w, mk["y"] * h
+            draw.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=col(mk, 0.15))
+        elif kind == "band":
+            draw.polygon(bar(mk, mk.get("width", 0.06) * sz, mk.get("length", 2.0)),
+                         fill=col(mk, 0.2))
+        elif kind == "line":
+            n = int(mk.get("count", 1))
+            width = max(1.0, mk.get("width", 0.004) * sz)
+            gap = mk.get("gap", 0.02) * sz
+            for k in range(n):
+                off = (k - (n - 1) / 2) * gap
+                draw.polygon(bar(mk, width, mk.get("length", 2.0), off), fill=col(mk, 0.0))
+        if top is not None:
+            _paint_relief(sheet, top, level, unit, pdir)
 
 
 def _draw_construction_lines(canvas: Image.Image, genome: ShapeGenome,
@@ -805,7 +1178,9 @@ def _draw_construction_lines(canvas: Image.Image, genome: ShapeGenome,
 
 def _render_cuboid_layer(shape: Shape, width: int, height: int,
                           palette: list[tuple],
-                          genome: ShapeGenome) -> Image.Image:
+                          genome: ShapeGenome,
+                          depth_cue: float = 0.0,
+                          ground: tuple[int, int, int] | None = None) -> Image.Image:
     """Render a shape as an oblique-projected 3D extruded polygon with face shading.
     
     Generates local vertices based on shape kind, extrudes them, 
@@ -826,6 +1201,12 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
         base = _mix(rgb, _PLASTER_WHITE, 0.14)
     else:
         base = _mix(rgb, _PLASTER_WHITE, 0.06)
+    # Depth by level, painted per element: higher roofs come forward a
+    # touch lighter, lower ones recede a touch toward the ground colour.
+    if depth_cue > 0:
+        base = _mix(base, _LIGHT_IVORY, 0.07 * depth_cue)
+    elif depth_cue < 0 and ground is not None:
+        base = _mix(base, ground, 0.12 * -depth_cue)
     front_color = base + (alpha,)
 
     # Projection vectors (pixels per unit)
@@ -838,12 +1219,20 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     elev_dx = shape.elevation * scale * proj_dx
     elev_dy = shape.elevation * scale * proj_dy
 
+    if shape.kind in ("sphere", "cone", "pyramid", "tetra"):
+        return _render_solid_layer(shape, width, height, base, alpha,
+                                   (proj_dx, proj_dy), scale)
+
     # Front face dimensions and center (with elevation offset)
     min_px = max(6, int(min(width, height) * 0.014))
     pw = max(min_px, int(shape.w * width))
     ph = max(min_px, int(shape.h * height))
-    cx = shape.x * width + elev_dx
-    cy = shape.y * height + elev_dy
+    # Elevation is the height of the roof: the roof is drawn raised toward
+    # the viewer (against the extrusion direction) and the walls run back
+    # down from it.  Higher roofs are also painted later, so position and
+    # occlusion agree.
+    cx = shape.x * width - elev_dx
+    cy = shape.y * height - elev_dy
 
     # Apply rotation around center
     rad = math.radians(shape.rotation)
@@ -859,8 +1248,9 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
     # Back face = front displaced by depth projection.
     back = [(x + depth_dx, y + depth_dy) for x, y in front]
 
-    # Final safety fit: keep projected volumes fully inside render bounds.
-    pad = 2.0
+    # Final safety fit: keep projected volumes fully inside render bounds
+    # (except a bleeding spine, which is meant to run off the sheet).
+    pad = -1e9 if shape.bleed else 2.0
     all_pts = front + back
     min_x = min(p[0] for p in all_pts)
     max_x = max(p[0] for p in all_pts)
@@ -930,14 +1320,49 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
             sum(p[1] for p in item[0]) * depth_dy
         ), reverse=True)
 
+        painted = material != "glass"
+        line_w = max(1, int(round(min(width, height) / 750)))
         for face, fc in faces_to_draw:
-            # Outline in the face's own colour: closes AA seams between
-            # adjacent faces without drawing cartoon contour lines.
-            draw.polygon(_ipoly(face), fill=fc, outline=fc)
+            if not painted:
+                draw.polygon(_ipoly(face), fill=fc, outline=fc)
+                continue
+            # Painted gradation down the wall in three quiet steps (lighter
+            # under the roof edge, darker toward the base), as on Lissitzky's
+            # Proun walls.  Each strip is outlined in its own colour so no
+            # seams show.
+            p1, p2, b2, b1 = face
+            steps = ((0.0, 1 / 3, _mix(fc[:3], _LIGHT_IVORY, 0.05)),
+                     (1 / 3, 2 / 3, fc[:3]),
+                     (2 / 3, 1.0, _darken(fc[:3], 0.07)))
+            for t0, t1, col in steps:
+                a0 = (p1[0] + (b1[0] - p1[0]) * t0, p1[1] + (b1[1] - p1[1]) * t0)
+                a1 = (p2[0] + (b2[0] - p2[0]) * t0, p2[1] + (b2[1] - p2[1]) * t0)
+                c1 = (p2[0] + (b2[0] - p2[0]) * t1, p2[1] + (b2[1] - p2[1]) * t1)
+                c0 = (p1[0] + (b1[0] - p1[0]) * t1, p1[1] + (b1[1] - p1[1]) * t1)
+                col = col + (alpha,)
+                draw.polygon(_ipoly([a0, a1, c1, c0]), fill=col, outline=col)
+            # Contact line: where the wall meets whatever it stands on.
+            draw.line(_ipoly([b1, b2]), fill=_darken(fc[:3], 0.38) + (alpha,), width=line_w)
 
     # Front face (always visible, drawn last)
     front_pts = _ipoly(front)
     draw.polygon(front_pts, fill=front_color)
+
+    # Lit arrises: a crisp, thin ivory edge where the roof meets the light
+    # (Lissitzky's sharp highlight), the one thing that makes a painted
+    # volume look finished rather than cut from card.
+    if material != "glass" and shape.depth > 0.002:
+        edge_w = max(1, int(round(min(width, height) / 600)))
+        hi = _mix(base, _LIGHT_IVORY, 0.65) + (alpha,)
+        n_pts = len(front)
+        for i in range(n_pts):
+            p1, p2 = front[i], front[(i + 1) % n_pts]
+            nx, ny = p2[1] - p1[1], -(p2[0] - p1[0])
+            nn = math.hypot(nx, ny)
+            if nn < 1e-6:
+                continue
+            if (nx * _LIGHT_DIR[0] + ny * _LIGHT_DIR[1]) / nn > 0.3:
+                draw.line(_ipoly([p1, p2]), fill=hi, width=edge_w)
 
     # Architectural detail patterns on front face
     if shape.detail != "none":
@@ -946,6 +1371,147 @@ def _render_cuboid_layer(shape: Shape, width: int, height: int,
         det_light = _lighten(front_color[:3], 0.10) + (alpha,)
         _draw_face_details(draw, front, shape, det_dark, det_light, width, height)
 
+    return layer
+
+
+def _construction_ink(base: tuple[int, int, int]) -> tuple[int, int, int, int]:
+    """Graphite on light forms, pale chalk on dark ones, so the ruled lines
+    always read."""
+    lum = 0.299 * base[0] + 0.587 * base[1] + 0.114 * base[2]
+    return (_GRAPHITE if lum > 110 else (226, 220, 204)) + (235,)
+
+
+def _dashed(draw: ImageDraw.ImageDraw, p0, p1, fill, width: int, dash: float) -> None:
+    """A ruled dashed line (construction / hidden edge)."""
+    x0, y0 = p0
+    x1, y1 = p1
+    length = math.hypot(x1 - x0, y1 - y0)
+    if length < 1e-6:
+        return
+    if dash >= length:
+        draw.line([(int(x0), int(y0)), (int(x1), int(y1))], fill=fill, width=width)
+        return
+    n = int(length / dash)
+    for k in range(0, n, 2):
+        t0, t1 = k * dash / length, min(1.0, (k + 1) * dash / length)
+        draw.line([(int(x0 + (x1 - x0) * t0), int(y0 + (y1 - y0) * t0)),
+                   (int(x0 + (x1 - x0) * t1), int(y0 + (y1 - y0) * t1))],
+                  fill=fill, width=width)
+
+
+def _half_plane(poly, origin, normal):
+    """Clip a polygon to the side where (p - origin) . normal >= 0."""
+    out = []
+    n = len(poly)
+    for i in range(n):
+        a, b = poly[i], poly[(i + 1) % n]
+        da = (a[0] - origin[0]) * normal[0] + (a[1] - origin[1]) * normal[1]
+        db = (b[0] - origin[0]) * normal[0] + (b[1] - origin[1]) * normal[1]
+        if da >= 0:
+            out.append(a)
+        if (da >= 0) != (db >= 0):
+            t = da / (da - db)
+            out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+    return out
+
+
+def _hull(points):
+    pts = sorted(set((round(x, 2), round(y, 2)) for x, y in points))
+    if len(pts) < 3:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lower, upper = [], []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _render_solid_layer(shape: Shape, width: int, height: int,
+                        base: tuple[int, int, int], alpha: int,
+                        proj: tuple[float, float], scale: int) -> Image.Image:
+    """Sphere, cone, pyramid or tetrahedron, painted in flat hard-edged
+    values (lit / half / shade faces, no gradient, no outline)."""
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    pdx, pdy = proj
+    r = shape.w * width / 2.0
+    lx, ly = _LIGHT_DIR
+    ln = math.hypot(lx, ly) or 1.0
+    lx, ly = lx / ln, ly / ln
+    lit = _mix(base, _LIGHT_IVORY, 0.14) + (alpha,)
+    shade = _face_shade(base, -lx, -ly) + (alpha,)
+
+    def ip(pts):
+        return [tuple(map(int, p)) for p in pts]
+
+    if shape.kind == "sphere":
+        roof = (shape.x * width - shape.elevation * scale * pdx,
+                shape.y * height - shape.elevation * scale * pdy)
+        cx = roof[0] + shape.depth * scale * pdx / 2
+        cy = roof[1] + shape.depth * scale * pdy / 2
+        box = [cx - r, cy - r, cx + r, cy + r]
+        draw.ellipse(box, fill=shade)
+        mask = Image.new("L", (width, height), 0)
+        ImageDraw.Draw(mask).ellipse(box, fill=255)
+        litm = Image.new("L", (width, height), 0)
+        ox, oy = lx * r * 0.42, ly * r * 0.42
+        ImageDraw.Draw(litm).ellipse([cx - r * 0.86 + ox, cy - r * 0.86 + oy,
+                                      cx + r * 0.86 + ox, cy + r * 0.86 + oy], fill=255)
+        layer.paste(Image.new("RGBA", (width, height), lit), (0, 0),
+                    ImageChops.multiply(mask, litm))
+        return layer
+
+    floor = shape.elevation - shape.depth
+    bc = (shape.x * width - floor * scale * pdx, shape.y * height - floor * scale * pdy)
+    apex = (shape.x * width - shape.elevation * scale * pdx,
+            shape.y * height - shape.elevation * scale * pdy)
+    if shape.kind == "cone":
+        hull = _hull([(bc[0] + r * math.cos(2 * math.pi * k / 64),
+                       bc[1] + r * math.sin(2 * math.pi * k / 64)) for k in range(64)] + [apex])
+        draw.polygon(ip(hull), fill=lit)
+        ax, ay = apex[0] - bc[0], apex[1] - bc[1]
+        nx, ny = -ay, ax
+        if nx * lx + ny * ly > 0:
+            nx, ny = -nx, -ny                      # the half turned from the light
+        if math.hypot(nx, ny) > 1e-6:
+            half = _half_plane(hull, bc, (nx, ny))
+            if len(half) >= 3:
+                draw.polygon(ip(half), fill=shade)
+        return layer
+
+    # Pyramid (square base) or tetrahedron (triangular base): one flat
+    # value per face, from its outward normal, painted back to front.
+    rad = math.radians(shape.rotation)
+    c, sn = math.cos(rad), math.sin(rad)
+    hw, hh = shape.w * width / 2, shape.h * height / 2
+    if shape.kind == "pyramid":
+        local = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+    else:
+        local = [(0.0, -hh), (hw, hh), (-hw, hh)]
+    basep = [(bc[0] + x * c - y * sn, bc[1] + x * sn + y * c) for x, y in local]
+    faces = []
+    n = len(basep)
+    for i in range(n):
+        p1, p2 = basep[i], basep[(i + 1) % n]
+        mx, my = (p1[0] + p2[0]) / 2 - bc[0], (p1[1] + p2[1]) / 2 - bc[1]
+        ex, ey = p2[0] - p1[0], p2[1] - p1[1]
+        nx, ny = ey, -ex
+        if nx * mx + ny * my < 0:
+            nx, ny = -nx, -ny                      # outward
+        faces.append(([p1, p2, apex], nx, ny))
+    # Faces turned toward the extrusion direction lie in front.
+    faces.sort(key=lambda f: f[1] * pdx + f[2] * pdy)
+    for pts, nx, ny in faces:
+        col = _face_shade(base, nx, ny) + (alpha,)
+        draw.polygon(ip(pts), fill=col, outline=col)
     return layer
 
 
@@ -1395,6 +1961,10 @@ def render_genome(genome: ShapeGenome, width: int, height: int,
     if gradient is None:
         gradient = GRADIENT_STRENGTH
 
+    if getattr(genome, "city", None) is not None:
+        from src.shapes.citymap import render_city
+        return render_city(genome.city, width, height, palette, grain)
+
     if genome.projection_strength > 0.01:
         return _render_genome_3d(genome, width, height, palette, grain, gradient)
 
@@ -1431,7 +2001,7 @@ def _render_genome_3d(genome: ShapeGenome, width: int, height: int,
     canvas = Image.new("RGBA", (iw, ih))
     _paint_ground(canvas, genome, palette, grain)
     _draw_construction_lines(canvas, genome, (0, 0, iw, ih))
-    canvas.alpha_composite(_build_stack_3d(genome, iw, ih, palette))
+    _build_stack_3d(genome, iw, ih, palette, base=canvas, grain=grain)
 
     # Painted on a sheet: no grading, shadows or overlays after this point.
     result = canvas.convert("RGB")
@@ -1465,6 +2035,13 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
         return render_genome(genome, square_size, square_size, palette,
                              grain, gradient)
 
+    if getattr(genome, "city", None) is not None:
+        # A map just shows more of the city on a wider/taller sheet.
+        from src.shapes.citymap import render_city
+        w, h = ((int(square_size * 1.5), square_size) if orientation == "landscape"
+                else (square_size, int(square_size * 1.5)))
+        return render_city(genome.city, w, h, palette, grain)
+
     if orientation == "landscape":
         out_w = int(square_size * 1.5)
         out_h = square_size
@@ -1488,7 +2065,9 @@ def render_genome_extended(genome: ShapeGenome, square_size: int,
     if is_3d:
         _paint_ground(canvas, genome, palette, grain)
         _draw_construction_lines(canvas, genome, (off_x, off_y, off_x + sq_iw, off_y + sq_ih))
-        shapes_layer = _build_stack_3d(genome, sq_iw, sq_ih, palette)
+        box = (off_x, off_y, off_x + sq_iw, off_y + sq_ih)
+        shapes_layer = canvas.crop(box)
+        _build_stack_3d(genome, sq_iw, sq_ih, palette, base=shapes_layer, grain=grain)
     else:
         shapes_layer = Image.new("RGBA", (sq_iw, sq_ih), (0, 0, 0, 0))
         for shape in genome.flatten():

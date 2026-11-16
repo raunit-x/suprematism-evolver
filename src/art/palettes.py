@@ -87,25 +87,45 @@ HADID_PALETTE = {
     "signal_red":    hex_to_rgb("#CF2E2E"),
     "ochre_yellow":  hex_to_rgb("#D5B143"),
     "pale_blue":     hex_to_rgb("#AFC0DC"),
+    # Saturated primaries in several tones (Hadid's "Malevich's Tektonik").
+    # Appended so indices of existing saved genomes are unchanged.
+    "ultramarine":   hex_to_rgb("#1D35C4"),
+    "vermilion":     hex_to_rgb("#E0371F"),
+    "carmine":       hex_to_rgb("#A6182C"),
+    "chrome_yellow": hex_to_rgb("#EDB31B"),
+    "lavender_grey": hex_to_rgb("#A6ADCB"),
+    "prussian":      hex_to_rgb("#10295A"),
 }
 
 # --- Maps Palette ---
-# Bold palette for abstract city-plan compositions.
-# Inspired by Zaha Hadid's masterplan paintings — high-contrast primaries
-# (signal red, cobalt blue, orange, white) against dark charcoal grounds.
+# Constructivist city maps: lamp-black, vermilion, ultramarine and chrome
+# yellow with warm greys, painted on aged paper.  Order is fixed: indices
+# are named in src/shapes/citymap.py.
 MAPS_PALETTE = {
-    "off_white":     hex_to_rgb("#F0EDE4"),    # 0  bg light
-    "charcoal":      hex_to_rgb("#1C1C1E"),    # 1  bg dark / roads
-    "silver":        hex_to_rgb("#C0C2C8"),    # 2  road lines
-    "signal_red":    hex_to_rgb("#CF2E2E"),    # 3  accent / building
-    "cobalt_blue":   hex_to_rgb("#2059BA"),    # 4  accent / building
-    "orange":        hex_to_rgb("#E06828"),    # 5  building
-    "white":         hex_to_rgb("#FAFAFA"),    # 6  building / highlight
-    "ochre_yellow":  hex_to_rgb("#D5B143"),    # 7  monument
-    "deep_red":      hex_to_rgb("#8B1A1A"),    # 8  road accent
-    "cool_grey":     hex_to_rgb("#6B6E76"),    # 9  building
-    "pale_blue":     hex_to_rgb("#AFC0DC"),    # 10 building
-    "graphite":      hex_to_rgb("#3A3A42"),    # 11 bg dark alt
+    "paper":         hex_to_rgb("#E6DAC0"),    # 0  ground / streets
+    "lamp_black":    hex_to_rgb("#1D1B1A"),    # 1
+    "vermilion":     hex_to_rgb("#D8401F"),    # 2
+    "ultramarine":   hex_to_rgb("#1F3B9A"),    # 3
+    "chrome_yellow": hex_to_rgb("#E9B021"),    # 4
+    "warm_grey":     hex_to_rgb("#8C8379"),    # 5
+    "dark_grey":     hex_to_rgb("#48443F"),    # 6
+    "ivory":         hex_to_rgb("#F3EDE0"),    # 7
+    "carmine":       hex_to_rgb("#A3222B"),    # 8
+    "cobalt":        hex_to_rgb("#3E6FB8"),    # 9
+    "ochre":         hex_to_rgb("#BF8A36"),    # 10
+    # Wider Constructivist range (Popova, Stepanova, Stenberg, Exter).
+    "viridian":      hex_to_rgb("#2F6E52"),    # 11
+    "teal":          hex_to_rgb("#1E7078"),    # 12
+    "salmon":        hex_to_rgb("#E2876C"),    # 13
+    "plum":          hex_to_rgb("#5A3557"),    # 14
+    "sienna":        hex_to_rgb("#94452A"),    # 15
+    "navy":          hex_to_rgb("#1B2541"),    # 16
+    "sky":           hex_to_rgb("#93B2CF"),    # 17
+    "kraft":         hex_to_rgb("#C7A774"),    # 18
+    "pale_grey":     hex_to_rgb("#CEC9BE"),    # 19
+    "olive":         hex_to_rgb("#6F6A35"),    # 20
+    "rose":          hex_to_rgb("#E59A9C"),    # 21  Rodchenko pink
+    "orange":        hex_to_rgb("#E8722A"),    # 22
 }
 
 PALETTES = {

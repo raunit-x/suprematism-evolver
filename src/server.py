@@ -1,8 +1,10 @@
 """Suprematism Evolution -- Web UI Server.
 
-Supports two engines:
-  - "cppn"   : CPPN-NEAT (original Picbreeder-style)
-  - "shapes" : Shape-genome evolution (explicit geometric primitives)
+Engines:
+  - "cppn"        : CPPN-NEAT (original Picbreeder-style)
+  - "shapes"      : Shape-genome evolution (explicit geometric primitives)
+  - "hadid"/"maps": 3D variants of the shapes engine
+  - "renaissance" : sacred-scene genomes + CPPN fields, glaze renderer
 
 Launch:
     python -m src.server
@@ -25,7 +27,8 @@ from pathlib import Path
 import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from collections import OrderedDict
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from src.neat.population import Population
@@ -36,9 +39,13 @@ from src.cppn.activations import MALEVICH_ACTIVATIONS, ALL_ACTIVATIONS
 
 from src.shapes.population import ShapePopulation
 from src.shapes.renderer import render_genome, render_genome_extended
+from src.renaissance.population import RenaissancePopulation
 from src import render_pool
 
 OUTPUT_DIR = Path("output")
+# Engines whose population lives in ``AppState.shape_pop`` and renders on
+# the process pool.
+SHAPE_ENGINES = ("shapes", "hadid", "maps", "renaissance")
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -48,7 +55,7 @@ def _prefetch_home():
     try:
         render_pool.warm_up()
         state.get_home_samples()
-        _build_infographic()
+        api_demo()
     except Exception as exc:  # a failed warm-up must never take the server down
         print(f"[prefetch] skipped: {exc}")
 
@@ -108,6 +115,9 @@ class AppState:
         self.batch_size: int = 2048
         self.mutation_strength: float = 1.0
         self.crossover_rate: float = 0.7
+        self.refine: float | None = None      # None = auto (cools with generation)
+        self.detail: float | None = None      # None = auto (follows refine)
+        self._view_cache: OrderedDict = OrderedDict()
         self.grain_strength: float = 8.0
         self.gradient_strength: float = 10.0
         self._networks = []
@@ -170,19 +180,30 @@ class AppState:
             "crossover_rate": self.crossover_rate,
             "tournament_k": 3,
             "mutation_strength": self.mutation_strength,
+            "refine": self.refine,
+            "detail": self.detail,
         }
 
     # ---- Initialization ----
 
     def initialize(self):
-        if self.engine in ("shapes", "hadid", "maps"):
-            self.shape_pop = ShapePopulation(self._build_shape_config())
+        if self.engine == "renaissance":
+            pop = RenaissancePopulation(self._build_shape_config())
+            pop.initialize()
+            self.shape_pop = pop
+            self.pop = None
+            self._networks = []
+        elif self.engine in SHAPE_ENGINES:
+            # Build fully, then swap in: a request arriving mid-reset must
+            # never see an empty population.
+            pop = ShapePopulation(self._build_shape_config())
             if self.engine == "hadid":
-                self.shape_pop.initialize_architecton()
+                pop.initialize_architecton()
             elif self.engine == "maps":
-                self.shape_pop.initialize_maps()
+                pop.initialize_maps()
             else:
-                self.shape_pop.initialize()
+                pop.initialize()
+            self.shape_pop = pop
             self.pop = None
             self._networks = []
         else:
@@ -195,10 +216,29 @@ class AppState:
         self._history_idx = -1
         self._push_history()
 
+    def adopt_shapes(self, genomes: list) -> dict:
+        """Start a Shapes session from externally bred genomes (the home demo).
+        Missing slots are filled with offspring of the adopted genomes."""
+        import random
+        with self.lock:
+            self.engine = "shapes"
+            self.pop = None
+            self._networks = []
+            self.shape_pop = ShapePopulation(self._build_shape_config())
+            pool = list(genomes)
+            while len(pool) < self.pop_size:
+                pool.append(self.shape_pop._breed_child(
+                    random.sample(genomes, min(2, len(genomes)))))
+            self.shape_pop.genomes = pool[: self.pop_size]
+            self._history = []
+            self._history_idx = -1
+            self._push_history()
+            return self.get_state_payload()
+
     # ---- History ----
 
     def _is_shapes(self) -> bool:
-        return self.engine in ("shapes", "hadid", "maps")
+        return self.engine in SHAPE_ENGINES
 
     def _render_key(self) -> tuple:
         if self._is_shapes():
@@ -220,6 +260,21 @@ class AppState:
         snap.thumbnails = [None] * len(snap.genomes)
         snap.render_key = self._render_key()
         snap.rev = self._new_rev()
+
+    def discard_renders(self):
+        """Forget every cached render so the next request draws it afresh:
+        the current generation (re-streamed via /api/thumbs/stream), older
+        history snapshots (re-rendered when navigated to), full-size views
+        and the home-page galleries."""
+        with self.lock:
+            for snap in self._history:
+                snap.render_key = None
+            if self._history:
+                self.invalidate_thumbnails()
+            self._view_cache.clear()
+        with self._home_lock:
+            self._home_samples_cache = None
+        self._infographic_cache = None
 
     def _push_history(self):
         genomes = self._current_genomes()
@@ -246,7 +301,7 @@ class AppState:
             snap.render_key = self._render_key()
             snap.rev = self._new_rev()
 
-        if self.engine in ("shapes", "hadid", "maps") and self.shape_pop:
+        if self.engine in SHAPE_ENGINES and self.shape_pop:
             self.shape_pop.genomes = [g.copy() for g in snap.genomes]
             self.shape_pop.generation = snap.generation
 
@@ -347,12 +402,12 @@ class AppState:
     # ---- State payload ----
 
     def _current_genomes(self) -> list:
-        if self.engine in ("shapes", "hadid", "maps"):
+        if self.engine in SHAPE_ENGINES:
             return self.shape_pop.genomes
         return self.pop.genomes
 
     def _current_generation(self) -> int:
-        if self.engine in ("shapes", "hadid", "maps"):
+        if self.engine in SHAPE_ENGINES:
             return self.shape_pop.generation
         return self.pop.generation
 
@@ -367,6 +422,9 @@ class AppState:
             "thumb_size": self.thumb_size,
             "mutation_strength": self.mutation_strength,
             "crossover_rate": self.crossover_rate,
+            "refine": -1.0 if self.refine is None else self.refine,
+            "detail": -1.0 if self.detail is None else self.detail,
+            "temperature": self.shape_pop.temperature() if self.shape_pop else 1.0,
             "grain_strength": self.grain_strength,
             "gradient_strength": self.gradient_strength,
             "thumbnails": list(self._cached_thumbnails),
@@ -378,8 +436,10 @@ class AppState:
     # ---- Evolve ----
 
     def evolve(self, selected: list[int]):
-        if self.engine in ("shapes", "hadid", "maps"):
+        if self.engine in SHAPE_ENGINES:
             self.shape_pop.mutation_strength = self.mutation_strength
+            self.shape_pop.refine = self.refine
+            self.shape_pop.detail = self.detail
             self.shape_pop.evolve_with_selection(selected)
         else:
             palette_array = get_palette_array(self.palette)
@@ -410,6 +470,40 @@ class AppState:
         self._push_history()
 
     # ---- Export ----
+
+    def view_image(self, index: int, size: int) -> bytes:
+        """Render one individual of the current generation for on-screen
+        viewing (PNG bytes, nothing written to disk).  A few recent renders
+        are cached so stepping back and forth in the viewer is instant."""
+        rev = self._history[self._history_idx].rev
+        key = (rev, index, size, self.grain_strength, self.gradient_strength)
+        cached = self._view_cache.get(key)
+        if cached is not None:
+            self._view_cache.move_to_end(key)
+            return cached
+        if self._is_shapes():
+            genome = self.shape_pop.genomes[index].copy()
+            args = (genome, size, "square", self._shape_palette(),
+                    self.grain_strength, self.gradient_strength)
+            try:
+                data = render_pool.submit_hires(*args).result()
+            except Exception:  # pool unavailable -> render inline
+                data = render_pool.render_hires_task(*args)
+        else:
+            palette_array = get_palette_array(self.palette)
+            g = self.pop.genomes[index]
+            img = render_to_image(
+                self._networks[index], size, size, self.color_mode, palette_array,
+                focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                armature_angle=g.comp_armature_angle,
+            )
+            buf = io.BytesIO()
+            img.save(buf, format="PNG", compress_level=1)
+            data = buf.getvalue()
+        self._view_cache[key] = data
+        while len(self._view_cache) > 16:
+            self._view_cache.popitem(last=False)
+        return data
 
     def export_hires(self, index: int, orientation: str = "square") -> str:
         """Render one individual at full resolution; returns the saved filename."""
@@ -448,7 +542,7 @@ class AppState:
         """Snapshot the population and render it all in a background job."""
         gen = self._current_generation()
         genomes = [g.copy() for g in self._current_genomes()]
-        shapes = self.engine in ("shapes", "hadid", "maps")
+        shapes = self.engine in SHAPE_ENGINES
         palette = self._shape_palette() if shapes else None
         networks = None if shapes else list(self._networks)
         cppn_genomes = None if shapes else list(self.pop.genomes)
@@ -510,7 +604,7 @@ class AppState:
         gen = self._current_generation()
         path = OUTPUT_DIR / f"genome_{gen:04d}_{index:02d}.json"
 
-        if self.engine in ("shapes", "hadid", "maps"):
+        if self.engine in SHAPE_ENGINES:
             self.shape_pop.save_genome(index, path)
         else:
             self.pop.save_genome(index, path)
@@ -616,6 +710,8 @@ class ResetRequest(BaseModel):
 class SettingsRequest(BaseModel):
     mutation_strength: float | None = None
     crossover_rate: float | None = None
+    refine: float | None = None          # 0 explore .. 1 refine; negative = auto
+    detail: float | None = None          # 0 none .. 1 lots of new structure; negative = auto
     grain_strength: float | None = None
     gradient_strength: float | None = None
 
@@ -626,7 +722,7 @@ class SettingsRequest(BaseModel):
 
 @app.get("/api/state")
 def api_state():
-    if state.engine in ("shapes", "hadid", "maps") and state.shape_pop is None:
+    if state.engine in SHAPE_ENGINES and state.shape_pop is None:
         state.initialize()
     elif state.engine == "cppn" and state.pop is None:
         state.initialize()
@@ -635,7 +731,7 @@ def api_state():
 
 @app.post("/api/evolve")
 def api_evolve(req: EvolveRequest):
-    if state.engine in ("shapes", "hadid", "maps") and state.shape_pop is None:
+    if state.engine in SHAPE_ENGINES and state.shape_pop is None:
         state.initialize()
     elif state.engine == "cppn" and state.pop is None:
         state.initialize()
@@ -654,6 +750,17 @@ def api_export(req: ExportRequest):
     name = state.export_hires(req.index, orientation=orientation)
     return JSONResponse({"url": f"/api/export_file/{name}", "filename": name,
                          "index": req.index, "orientation": orientation})
+
+
+@app.get("/api/view/{index}")
+def api_view(index: int, size: int = 2048):
+    """Full-resolution PNG of one individual for the in-page viewer."""
+    genomes = state._current_genomes()
+    if not genomes or not (0 <= index < len(genomes)):
+        return JSONResponse({"error": "Invalid index"}, status_code=400)
+    size = max(512, min(3072, int(size)))
+    return Response(state.view_image(index, size), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/export_file/{name}")
@@ -719,12 +826,20 @@ def api_settings(req: SettingsRequest):
     rerender = False
     if req.mutation_strength is not None:
         state.mutation_strength = max(0.0, min(3.0, req.mutation_strength))
-        if state.engine in ("shapes", "hadid", "maps") and state.shape_pop:
+        if state.engine in SHAPE_ENGINES and state.shape_pop:
             state.shape_pop.mutation_strength = state.mutation_strength
     if req.crossover_rate is not None:
         state.crossover_rate = max(0.0, min(1.0, req.crossover_rate))
-        if state.engine in ("shapes", "hadid", "maps") and state.shape_pop:
+        if state.engine in SHAPE_ENGINES and state.shape_pop:
             state.shape_pop.crossover_rate = state.crossover_rate
+    if req.refine is not None:
+        state.refine = None if req.refine < 0 else max(0.0, min(1.0, req.refine))
+        if state.shape_pop:
+            state.shape_pop.refine = state.refine
+    if req.detail is not None:
+        state.detail = None if req.detail < 0 else max(0.0, min(1.0, req.detail))
+        if state.shape_pop:
+            state.shape_pop.detail = state.detail
     if req.grain_strength is not None:
         state.grain_strength = max(0.0, min(30.0, req.grain_strength))
         rerender = True
@@ -734,6 +849,16 @@ def api_settings(req: SettingsRequest):
     if rerender and state.shape_pop and state._history:
         state.invalidate_thumbnails()   # re-rendered lazily via /api/thumbs/stream
     return JSONResponse(state.get_state_payload())
+
+
+@app.post("/api/rerender")
+def api_rerender():
+    """Called on every page load: drop all cached renders so a reload always
+    shows freshly drawn images of the same genomes."""
+    state.discard_renders()
+    with _demo_lock:
+        _demo["images"] = None
+    return JSONResponse({"ok": True})
 
 
 @app.get("/api/home_samples")
@@ -786,6 +911,132 @@ def _build_infographic(refresh: bool = False) -> dict:
 @app.get("/api/infographic")
 def api_infographic(refresh: int = 0):
     return JSONResponse(_build_infographic(bool(refresh)))
+
+
+# ---------------------------------------------------------------------------
+# Demo lab -- a tiny, separate population the home page breeds interactively
+# ---------------------------------------------------------------------------
+
+DEMO_SIZE = 8
+DEMO_PX = 240
+_demo_lock = threading.Lock()
+_demo: dict = {"pop": None, "lineage": []}
+
+
+def _hex(rgb) -> str:
+    return "#" + "".join(f"{int(round(max(0.0, min(1.0, c)) * 255)):02x}" for c in rgb)
+
+
+def _genome_summary(g, palette) -> dict:
+    shapes = g.flatten()
+    kinds: dict[str, int] = {}
+    for s in shapes:
+        kinds[s.kind] = kinds.get(s.kind, 0) + 1
+    used = []
+    for s in shapes:
+        c = _hex(palette[s.color_idx % len(palette)])
+        if c not in used:
+            used.append(c)
+    return {
+        "groups": len(g.groups),
+        "satellites": len(g.satellites),
+        "shapes": len(shapes),
+        "kinds": dict(sorted(kinds.items(), key=lambda kv: -kv[1])),
+        "colors": used[:6],
+        "armature": round(g.armature_angle, 1),
+        # Geometry for the home page's gene overlay (normalised canvas units,
+        # centre-anchored, rotation in degrees clockwise).
+        "geom": [{"k": sh.kind, "x": round(sh.x, 4), "y": round(sh.y, 4),
+                  "w": round(sh.w, 4), "h": round(sh.h, 4),
+                  "r": round(sh.rotation, 1),
+                  "c": _hex(palette[sh.color_idx % len(palette)])}
+                 for sh in shapes[:40]],
+    }
+
+
+def _demo_payload(images: list[str]) -> dict:
+    pop = _demo["pop"]
+    palette = list(SUPREMATIST_PALETTE.values())
+    return {
+        "generation": pop.generation,
+        "images": images,
+        "genomes": [_genome_summary(g, palette) for g in pop.genomes],
+        "lineage": _demo["lineage"],
+        "mutation": pop.mutation_strength,
+    }
+
+
+class DemoBreedRequest(BaseModel):
+    selected: list[int]
+    mutation: float = 1.0
+
+
+@app.get("/api/demo")
+def api_demo():
+    with _demo_lock:
+        pop = _demo["pop"]
+        if pop is not None:
+            if not _demo.get("images"):
+                # Renders were discarded (page reload): redraw the same genomes.
+                _demo["images"] = _render_all(
+                    pop.genomes, DEMO_PX, list(SUPREMATIST_PALETTE.values()),
+                    state.grain_strength, state.gradient_strength)
+            return JSONResponse(_demo_payload(_demo["images"]))
+    return api_demo_seed()
+
+
+@app.post("/api/demo/seed")
+def api_demo_seed():
+    palette = list(SUPREMATIST_PALETTE.values())
+    with _demo_lock:
+        pop = ShapePopulation({
+            "pop_size": DEMO_SIZE, "num_palette_colors": len(palette),
+            "elitism": 2, "crossover_rate": 0.7, "tournament_k": 2,
+            "mutation_strength": 1.0,
+        })
+        pop.initialize()
+        _demo["pop"] = pop
+        _demo["lineage"] = []
+        imgs = _render_all(pop.genomes, DEMO_PX, palette,
+                           state.grain_strength, state.gradient_strength)
+        _demo["images"] = imgs
+        return JSONResponse(_demo_payload(imgs))
+
+
+@app.post("/api/demo/breed")
+def api_demo_breed(req: DemoBreedRequest):
+    palette = list(SUPREMATIST_PALETTE.values())
+    with _demo_lock:
+        pop = _demo["pop"]
+        if pop is None:
+            return JSONResponse({"error": "seed first"}, status_code=409)
+        sel = [i for i in req.selected if 0 <= i < len(pop.genomes)][:4]
+        if not sel:
+            return JSONResponse({"error": "select at least one"}, status_code=400)
+        prev = _demo.get("images") or []
+        _demo["lineage"].append({
+            "generation": pop.generation,
+            "parents": [prev[i] for i in sel if i < len(prev)],
+        })
+        _demo["lineage"] = _demo["lineage"][-6:]
+        pop.mutation_strength = max(0.0, min(3.0, req.mutation))
+        pop.evolve_with_selection(sel)
+        imgs = _render_all(pop.genomes, DEMO_PX, palette,
+                           state.grain_strength, state.gradient_strength)
+        _demo["images"] = imgs
+        return JSONResponse(_demo_payload(imgs))
+
+
+@app.post("/api/demo/adopt")
+def api_demo_adopt():
+    """Hand the demo population over to the main Evolve workspace."""
+    with _demo_lock:
+        pop = _demo["pop"]
+        if pop is None:
+            return JSONResponse({"error": "seed first"}, status_code=409)
+        genomes = [g.copy() for g in pop.genomes]
+    data = state.adopt_shapes(genomes)
+    return JSONResponse(data)
 
 
 @app.get("/api/thumbs/stream")

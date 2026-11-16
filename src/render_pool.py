@@ -77,8 +77,17 @@ def _encode(img, fmt: str) -> bytes:
     return buf.getvalue()
 
 
+def _is_renaissance(genome) -> bool:
+    return getattr(genome, "engine_tag", None) == "renaissance"
+
+
 def render_task(genome, size: int, palette, grain: float, gradient: float,
                 fmt: str = "jpeg") -> bytes:
+    if _is_renaissance(genome):
+        # Palette/gradient don't apply; the grain slider scales brushwork.
+        from src.renaissance.renderer import render_scene
+        img = render_scene(genome, size, size, brush_scale=grain / 8.0)
+        return _encode(img, fmt)
     from src.shapes.renderer import render_genome
     img = render_genome(genome, size, size, palette, grain, gradient)
     return _encode(img, fmt)
@@ -86,6 +95,11 @@ def render_task(genome, size: int, palette, grain: float, gradient: float,
 
 def render_hires_task(genome, size: int, orientation: str, palette,
                       grain: float, gradient: float) -> bytes:
+    if _is_renaissance(genome):
+        from src.renaissance.renderer import render_scene_extended
+        img = render_scene_extended(genome, size, orientation,
+                                    brush_scale=grain / 8.0)
+        return _encode(img, "png")
     from src.shapes.renderer import render_genome_extended
     img = render_genome_extended(genome, size, orientation, palette,
                                  grain, gradient)

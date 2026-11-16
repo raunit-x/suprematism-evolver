@@ -11,6 +11,7 @@ import json
 import random
 from pathlib import Path
 
+from src.shapes import citymap
 from src.shapes import composition as comp_ops
 from src.shapes.genome import (
     ShapeGenome,
@@ -27,9 +28,12 @@ HARMONY_CANDIDATES = 4
 
 # Composition (Hadid) breeding: candidate pool size per open slot, and fresh
 # random newcomers injected every generation to prevent collapse.
-POOL_PER_SLOT = 4
-NEWCOMERS = 2
+POOL_PER_SLOT = 6
+NEWCOMERS = 4             # at full heat; scaled by temperature
 IMMIGRANT_CROSS = 0.2     # share of children that are a pick x newcomer cross
+COOLING = 0.9             # auto: temperature = COOLING ** (generation - WARM_GENERATIONS)
+WARM_GENERATIONS = 3      # auto: fully exploratory for the first generations
+MIN_TEMP = 0.2
 
 
 class ShapePopulation:
@@ -41,6 +45,12 @@ class ShapePopulation:
         self.tournament_k: int = cfg.get("tournament_k", 3)
         self.num_palette_colors: int = cfg.get("num_palette_colors", 6)
         self.mutation_strength: float = cfg.get("mutation_strength", 1.0)
+        # Explore <-> Refine: None = automatic (cools with generation),
+        # otherwise 0.0 (explore) .. 1.0 (refine).
+        self.refine: float | None = cfg.get("refine")
+        # Detail: how much new structure children grow, 0..1; None = auto
+        # (tied to Explore <-> Refine).  Independent of mutation strength.
+        self.detail: float | None = cfg.get("detail")
 
         self.genomes: list[ShapeGenome] = []
         self.generation: int = 0
@@ -64,10 +74,16 @@ class ShapePopulation:
         self.generation = 0
 
     def initialize_maps(self) -> None:
-        """Initialize population with abstract city-plan genomes."""
+        """Initialize population with abstract city-map genomes; city types
+        and palettes are dealt round-robin so the first grid spans them all."""
+        plans = list(citymap.PLANS)
+        palettes = list(citymap.PALETTE_SETS)
+        random.shuffle(plans)
+        random.shuffle(palettes)
         self.genomes = [
-            create_map(self.num_palette_colors)
-            for _ in range(self.pop_size)
+            create_map(self.num_palette_colors, plans[i % len(plans)],
+                       palettes[i % len(palettes)])
+            for i in range(self.pop_size)
         ]
         self.generation = 0
 
@@ -78,8 +94,10 @@ class ShapePopulation:
         self.genomes.append(base.copy())
         for _ in range(self.pop_size - 1):
             child = base.copy()
-            if child.comp is not None:
-                comp_ops.mutate_composition(child.comp, self.mutation_strength)
+            if child.city is not None:
+                citymap.mutate_city(child.city, self.mutation_strength, 1.0)
+            elif child.comp is not None:
+                comp_ops.mutate_composition(child.comp, self.mutation_strength, 1.0)
                 child = comp_ops.express(child.comp)
             else:
                 mutate(child, self.num_palette_colors)
@@ -117,11 +135,18 @@ class ShapePopulation:
             if random.random() < self.crossover_rate:
                 p1 = self._tournament_select()
                 p2 = self._tournament_select()
-                child = crossover(p1, p2)
+                if p1.city is not None and p2.city is not None:
+                    child = p1.copy()
+                    child.city = citymap.crossover_city(p1.city, p2.city)
+                else:
+                    child = crossover(p1, p2)
             else:
                 child = self._tournament_select().copy()
 
-            mutate(child, self.num_palette_colors, strength=self.mutation_strength)
+            if child.city is not None:
+                citymap.mutate_city(child.city, self.mutation_strength, 1.0)
+            else:
+                mutate(child, self.num_palette_colors, strength=self.mutation_strength)
             next_gen.append(child)
 
         self.genomes = next_gen[: self.pop_size]
@@ -138,6 +163,10 @@ class ShapePopulation:
 
         for p in parents[:self.elitism]:
             next_gen.append(p.copy())
+
+        if all(p.city is not None for p in parents):
+            self._evolve_cities(parents)
+            return
 
         # Hadid architectons: breed a few siblings per slot and keep the most
         # harmonious.  Parents are still exactly the user's picks.
@@ -157,34 +186,67 @@ class ShapePopulation:
         self.genomes = next_gen[: self.pop_size]
         self.generation += 1
 
+    def temperature(self) -> float:
+        """1.0 = exploring .. MIN_TEMP = refining."""
+        if self.refine is not None:
+            return max(MIN_TEMP, 1.0 - max(0.0, min(1.0, self.refine)))
+        return max(MIN_TEMP, COOLING ** max(0, self.generation - WARM_GENERATIONS))
+
     def _evolve_compositions(self, parents: list[ShapeGenome]) -> None:
-        """Hadid breeding: the picks survive unchanged, children of the picks
-        fill most slots (pre-filtered and diversified), plus a couple of
-        random newcomers."""
+        """Hadid breeding: the picks survive unchanged and children of the
+        picks fill the generation.  Early on (hot) children change a lot,
+        some are crossed with newcomers and selection favours difference;
+        as the lineage cools, changes get smaller, cleanup takes over,
+        newcomers stop and selection favours harmony."""
+        temp = self.temperature()
+        refine = 1.0 - temp
         keep = [p.copy() for p in parents[:self.elitism]]
-        n_new = min(NEWCOMERS, max(0, self.pop_size - len(keep) - 1))
+        n_new = min(int(round(NEWCOMERS * temp)), max(0, self.pop_size - len(keep) - 1))
         n_children = self.pop_size - len(keep) - n_new
 
         pool = []
         for _ in range(n_children * POOL_PER_SLOT):
             roll = random.random()
-            if roll < IMMIGRANT_CROSS:
+            if roll < IMMIGRANT_CROSS * temp:
                 # Cross a pick with a random newcomer: novelty with lineage.
                 genes = comp_ops.crossover_composition(
                     random.choice(parents).comp, comp_ops.new_individual().comp)
-            elif len(parents) >= 2 and roll < IMMIGRANT_CROSS + self.crossover_rate * 0.8:
+            elif len(parents) >= 2 and roll < IMMIGRANT_CROSS * temp + self.crossover_rate * 0.8:
                 a, b = random.sample(parents, 2)
                 genes = comp_ops.crossover_composition(a.comp, b.comp)
             else:
                 genes = random.choice(parents).comp.copy()
-            for _ in range(1 + (random.random() < 0.5) + (random.random() < 0.25)):
-                comp_ops.mutate_composition(genes, self.mutation_strength)
+            for _ in range(1 + (random.random() < 0.5 * temp) + (random.random() < 0.25 * temp)):
+                comp_ops.mutate_composition(genes, self.mutation_strength, temp, self.detail)
             pool.append(comp_ops.express(genes))
-        children = comp_ops.select_diverse(pool, n_children)
+        children = comp_ops.select_diverse(pool, n_children, refine, existing=keep)
 
         fresh = comp_ops.select_diverse(
-            [comp_ops.new_individual() for _ in range(n_new * POOL_PER_SLOT)], n_new)
+            [comp_ops.new_individual() for _ in range(n_new * POOL_PER_SLOT)], n_new,
+            existing=keep + children)
 
+        self.genomes = (keep + children + fresh)[: self.pop_size]
+        self.generation += 1
+
+    def _evolve_cities(self, parents: list[ShapeGenome]) -> None:
+        """Maps breeding: picks survive unchanged; children are mutated
+        (often crossed) picks, with a few fresh cities while still hot."""
+        temp = self.temperature()
+        keep = [p.copy() for p in parents[:self.elitism]]
+        n_new = min(int(round(NEWCOMERS * temp * 0.5)),
+                    max(0, self.pop_size - len(keep) - 1))
+        children = []
+        while len(keep) + len(children) < self.pop_size - n_new:
+            if len(parents) >= 2 and random.random() < self.crossover_rate:
+                a, b = random.sample(parents, 2)
+                genes = citymap.crossover_city(a.city, b.city)
+            else:
+                genes = random.choice(parents).city.copy()
+            citymap.mutate_city(genes, self.mutation_strength, temp)
+            child = parents[0].copy()
+            child.city = genes
+            children.append(child)
+        fresh = [create_map(self.num_palette_colors) for _ in range(n_new)]
         self.genomes = (keep + children + fresh)[: self.pop_size]
         self.generation += 1
 
