@@ -11,6 +11,7 @@ import json
 import random
 from pathlib import Path
 
+from src import lineage
 from src.shapes import citymap
 from src.shapes import composition as comp_ops
 from src.shapes.genome import (
@@ -154,15 +155,16 @@ class ShapePopulation:
 
     def evolve_with_selection(self, selected_indices: list[int]) -> None:
         """Breed next generation exclusively from the user-selected parents."""
-        parents = [self.genomes[i] for i in selected_indices
-                   if 0 <= i < len(self.genomes)]
-        if not parents:
-            parents = [random.choice(self.genomes)]
+        sel = [i for i in selected_indices if 0 <= i < len(self.genomes)]
+        if not sel:
+            sel = [random.randrange(len(self.genomes))]
+        parents = [self.genomes[i] for i in sel]
+        lineage.mark_parents(parents, sel)
 
         next_gen: list[ShapeGenome] = []
 
         for p in parents[:self.elitism]:
-            next_gen.append(p.copy())
+            next_gen.append(lineage.survivor(p.copy(), p))
 
         if all(p.city is not None for p in parents):
             self._evolve_cities(parents)
@@ -200,7 +202,7 @@ class ShapePopulation:
         newcomers stop and selection favours harmony."""
         temp = self.temperature()
         refine = 1.0 - temp
-        keep = [p.copy() for p in parents[:self.elitism]]
+        keep = [lineage.survivor(p.copy(), p) for p in parents[:self.elitism]]
         n_new = min(int(round(NEWCOMERS * temp)), max(0, self.pop_size - len(keep) - 1))
         n_children = self.pop_size - len(keep) - n_new
 
@@ -209,16 +211,18 @@ class ShapePopulation:
             roll = random.random()
             if roll < IMMIGRANT_CROSS * temp:
                 # Cross a pick with a random newcomer: novelty with lineage.
+                src = [random.choice(parents)]
                 genes = comp_ops.crossover_composition(
-                    random.choice(parents).comp, comp_ops.new_individual().comp)
+                    src[0].comp, comp_ops.new_individual().comp)
             elif len(parents) >= 2 and roll < IMMIGRANT_CROSS * temp + self.crossover_rate * 0.8:
-                a, b = random.sample(parents, 2)
-                genes = comp_ops.crossover_composition(a.comp, b.comp)
+                src = random.sample(parents, 2)
+                genes = comp_ops.crossover_composition(src[0].comp, src[1].comp)
             else:
-                genes = random.choice(parents).comp.copy()
+                src = [random.choice(parents)]
+                genes = src[0].comp.copy()
             for _ in range(1 + (random.random() < 0.5 * temp) + (random.random() < 0.25 * temp)):
                 comp_ops.mutate_composition(genes, self.mutation_strength, temp, self.detail)
-            pool.append(comp_ops.express(genes))
+            pool.append(lineage.child(comp_ops.express(genes), *src))
         children = comp_ops.select_diverse(pool, n_children, refine, existing=keep)
 
         fresh = comp_ops.select_diverse(
@@ -232,32 +236,34 @@ class ShapePopulation:
         """Maps breeding: picks survive unchanged; children are mutated
         (often crossed) picks, with a few fresh cities while still hot."""
         temp = self.temperature()
-        keep = [p.copy() for p in parents[:self.elitism]]
+        keep = [lineage.survivor(p.copy(), p) for p in parents[:self.elitism]]
         n_new = min(int(round(NEWCOMERS * temp * 0.5)),
                     max(0, self.pop_size - len(keep) - 1))
         children = []
         while len(keep) + len(children) < self.pop_size - n_new:
             if len(parents) >= 2 and random.random() < self.crossover_rate:
-                a, b = random.sample(parents, 2)
-                genes = citymap.crossover_city(a.city, b.city)
+                src = random.sample(parents, 2)
+                genes = citymap.crossover_city(src[0].city, src[1].city)
             else:
-                genes = random.choice(parents).city.copy()
+                src = [random.choice(parents)]
+                genes = src[0].city.copy()
             citymap.mutate_city(genes, self.mutation_strength, temp)
             child = parents[0].copy()
             child.city = genes
-            children.append(child)
+            children.append(lineage.child(child, *src))
         fresh = [create_map(self.num_palette_colors) for _ in range(n_new)]
         self.genomes = (keep + children + fresh)[: self.pop_size]
         self.generation += 1
 
     def _breed_child(self, parents: list[ShapeGenome]) -> ShapeGenome:
         if len(parents) >= 2 and random.random() < self.crossover_rate:
-            p1, p2 = random.sample(parents, 2)
-            child = crossover(p1, p2)
+            src = random.sample(parents, 2)
+            child = crossover(*src)
         else:
-            child = random.choice(parents).copy()
+            src = [random.choice(parents)]
+            child = src[0].copy()
         mutate(child, self.num_palette_colors, strength=self.mutation_strength)
-        return child
+        return lineage.child(child, *src)
 
     # ------------------------------------------------------------------
     # Serialization

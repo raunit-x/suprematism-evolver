@@ -22,7 +22,7 @@ from PIL import Image
 
 from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE, HADID_PALETTE, MAPS_PALETTE
 from src.art.fitness import compute_style_fitness
-from src.cppn.activations import MALEVICH_ACTIVATIONS, BASQUIAT_ACTIVATIONS, ALL_ACTIVATIONS
+from src.cppn.activations import MALEVICH_PATTERN_ACTIVATIONS, BASQUIAT_ACTIVATIONS, PATTERN_ACTIVATIONS
 
 OUTPUT_DIR = Path("output")
 GRID_COLS = 5
@@ -63,10 +63,10 @@ def parse_args():
 
 def get_activation_options(mode: str) -> list[str] | None:
     if mode == "malevich":
-        return MALEVICH_ACTIVATIONS
+        return MALEVICH_PATTERN_ACTIVATIONS
     elif mode == "basquiat":
         return BASQUIAT_ACTIVATIONS
-    return ALL_ACTIVATIONS
+    return PATTERN_ACTIVATIONS
  
 
 def _run_shapes(args):
@@ -178,20 +178,10 @@ def _run_cppn(args):
 
     config = {
         "pop_size": args.pop_size,
-        "num_inputs": 5,
+        "num_inputs": 4,
         "num_outputs": 3,
         "output_activation": "tanh",
         "activation_options": activation_opts,
-        "weight_perturb_rate": 0.8,
-        "weight_perturb_power": 0.5,
-        "weight_replace_rate": 0.1,
-        "add_node_rate": 0.03,
-        "add_connection_rate": 0.05,
-        "activation_mutation_rate": 0.1,
-        "toggle_enable_rate": 0.01,
-        "crossover_rate": 0.5,
-        "compatibility_threshold": 3.0,
-        "elitism": 1,
     }
 
     pop = Population(config)

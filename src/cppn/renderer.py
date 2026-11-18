@@ -21,7 +21,12 @@ def make_coordinate_grid(
 
     Columns: [x, y, d, theta, bias, armature_d, armature_t].
 
-    x, y in [-1, 1]. d = distance from center. theta = angle from center.
+    x, y in [-1, 1]. d = distance from center. theta = mirrored angle from
+    center, |atan2(y, x)| - pi/2: the raw atan2 jumps from +pi to -pi along
+    the negative x axis, which stamped the same hard half-line seam into every
+    image whose network used theta non-periodically (i.e. almost all of them).
+    The mirrored angle is continuous, so it still gives fans and spirals
+    (mirrored about the horizontal axis) without the seam.
     armature_d = signed perpendicular distance from the armature axis line.
     armature_t = projection along the armature axis (parametric position).
     N = width * height.
@@ -33,7 +38,7 @@ def make_coordinate_grid(
     x_flat = x_grid.flatten()
     y_flat = y_grid.flatten()
     d_flat = np.sqrt(x_flat ** 2 + y_flat ** 2)
-    theta_flat = np.arctan2(y_flat, x_flat)
+    theta_flat = np.abs(np.arctan2(y_flat, x_flat)) - np.pi / 2
     bias_flat = np.ones_like(x_flat)
 
     cos_a = np.cos(armature_angle)
@@ -74,6 +79,12 @@ def render_cppn(
     """
     coords = make_coordinate_grid(width, height, focal_x, focal_y,
                                    armature_angle)
+    if len(network.input_keys) == 4:
+        # Picbreeder inputs: x, y, d, bias.  The angle input is left out: it
+        # is centred on the canvas like d, and connected straight to the
+        # outputs it stamped the same pinch at the centre into every image.
+        coords = coords[:, [0, 1, 2, 4]]
+    # 5 inputs (older genomes): x, y, d, theta, bias; 7: all columns.
     outputs = network.forward(coords)  # (N, num_outputs)
 
     num_out = outputs.shape[1]

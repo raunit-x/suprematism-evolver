@@ -9,6 +9,45 @@ from dataclasses import dataclass, field
 from src.cppn.activations import ALL_ACTIVATIONS
 
 
+class InnovationTracker:
+    """Population-wide registry of structural innovations.
+
+    NEAT's crossover and speciation align genes by id, which only works if the
+    same structural mutation gets the same id in every genome.  Without this,
+    each genome numbered its own new nodes, so node 12 in one genome and node
+    12 in another were unrelated, and crossover spliced together structure that
+    had nothing in common.  Splitting connection (a, b) now always yields the
+    same hidden-node id across the population.
+    """
+
+    def __init__(self, next_node_key: int = 0):
+        self.next_node_key = next_node_key
+        self._splits: dict[tuple[int, int], int] = {}
+
+    def sync(self, genomes) -> None:
+        """Make sure fresh ids never collide with ids already in ``genomes``."""
+        for g in genomes:
+            top = max(g.nodes, default=-1) + 1
+            self.next_node_key = max(self.next_node_key, g._next_node_key, top)
+
+    def _fresh(self, genome: "Genome") -> int:
+        key = max(self.next_node_key, genome._next_node_key)
+        self.next_node_key = key + 1
+        return key
+
+    def node_for_split(self, genome: "Genome", conn_key: tuple[int, int]) -> int:
+        key = self._splits.get(conn_key)
+        if key is None:
+            key = self._fresh(genome)
+            self._splits[conn_key] = key
+        elif key in genome.nodes:
+            # This genome already split that connection once; a second split
+            # is a different innovation.
+            key = self._fresh(genome)
+        genome._next_node_key = max(genome._next_node_key, key + 1)
+        return key
+
+
 @dataclass
 class NodeGene:
     key: int
@@ -123,8 +162,19 @@ class Genome:
                 conn.weight += random.gauss(0, perturb_power)
                 conn.weight = max(-weight_range, min(weight_range, conn.weight))
 
-    def mutate_add_node(self, activation_options: list[str] | None = None):
-        """Split a random enabled connection by inserting a new hidden node."""
+    def mutate_add_node(
+        self,
+        activation_options: list[str] | None = None,
+        innovations: InnovationTracker | None = None,
+        input_weight_range: float | None = None,
+    ):
+        """Split a random enabled connection by inserting a new hidden node.
+
+        Classic NEAT feeds the new node at weight 1.0 so behaviour barely
+        changes.  For a CPPN that keeps a periodic/gaussian node in the
+        near-linear part of its curve (inputs are only in [-1, 1]), so it adds
+        no pattern; ``input_weight_range`` draws the weight at random instead.
+        """
         enabled = [c for c in self.connections.values() if c.enabled]
         if not enabled:
             return
@@ -135,7 +185,10 @@ class Genome:
         if activation_options is None:
             activation_options = ALL_ACTIVATIONS
 
-        new_key = self.allocate_node_key()
+        if innovations is not None:
+            new_key = innovations.node_for_split(self, conn.key)
+        else:
+            new_key = self.allocate_node_key()
         act = random.choice(activation_options)
         self.nodes[new_key] = NodeGene(key=new_key, node_type="hidden", activation=act)
 
@@ -144,7 +197,10 @@ class Genome:
         src, dst = conn.key
         key1 = (src, new_key)
         key2 = (new_key, dst)
-        self.connections[key1] = ConnectionGene(key=key1, weight=1.0)
+        w_in = 1.0
+        if input_weight_range:
+            w_in = random.choice((-1, 1)) * random.uniform(0.5, input_weight_range)
+        self.connections[key1] = ConnectionGene(key=key1, weight=w_in)
         self.connections[key2] = ConnectionGene(key=key2, weight=conn.weight)
 
     def mutate_add_connection(self, weight_range: float = 2.0, max_attempts: int = 20):
@@ -170,6 +226,7 @@ class Genome:
                 # Re-enable if disabled
                 if not self.connections[conn_key].enabled:
                     self.connections[conn_key].enabled = True
+                    return
                 continue
 
             # Check for cycles: dst must not be an ancestor of src
@@ -181,21 +238,13 @@ class Genome:
             return
 
     def _creates_cycle(self, src: int, dst: int) -> bool:
-        """Check if adding dst->... can reach src (making src->dst a cycle)."""
-        # BFS from dst through existing connections
-        visited = set()
-        queue = [dst]
-        while queue:
-            node = queue.pop(0)
-            if node == src:
-                return True
-            if node in visited:
-                continue
-            visited.add(node)
-            for (s, d), conn in self.connections.items():
-                if s == node and conn.enabled and d not in visited:
-                    queue.append(d)
-        return False
+        """Would adding src->dst close a loop?
+
+        Disabled connections count too: they can be re-enabled later (toggle
+        mutation, add-connection re-enabling), and a loop that appears then
+        silently drops every node on it from the network.
+        """
+        return _reaches(self.connections, dst, src)
 
     def mutate_activation(self, activation_options: list[str] | None = None):
         """Change a random hidden node's activation function."""
@@ -208,33 +257,58 @@ class Genome:
         node.activation = random.choice(activation_options)
 
     def mutate_toggle_enable(self):
-        """Toggle a random connection's enabled state."""
+        """Toggle a random connection's enabled state.
+
+        Never disables a node's last enabled input, which would cut it (and
+        often a whole output) off and flatten the image.
+        """
         if not self.connections:
             return
         conn = random.choice(list(self.connections.values()))
+        if conn.enabled:
+            dst = conn.key[1]
+            live_in = sum(1 for c in self.connections.values()
+                          if c.enabled and c.key[1] == dst)
+            if live_in <= 1:
+                return
         conn.enabled = not conn.enabled
 
-    def mutate(self, config: dict | None = None):
-        """Apply all mutation operators according to rates."""
+    def mutate(
+        self,
+        config: dict | None = None,
+        innovations: InnovationTracker | None = None,
+        strength: float = 1.0,
+    ):
+        """Apply all mutation operators according to rates.
+
+        ``strength`` scales every rate and the weight step (1.0 = as
+        configured), so a UI mutation slider can drive it.
+        """
         if config is None:
             config = {}
+        k = max(0.0, strength)
+
+        def chance(rate: float) -> bool:
+            return random.random() < min(1.0, rate * k)
 
         self.mutate_weights(
-            perturb_rate=config.get("weight_perturb_rate", 0.8),
-            perturb_power=config.get("weight_perturb_power", 0.5),
-            replace_rate=config.get("weight_replace_rate", 0.1),
+            perturb_rate=min(1.0, config.get("weight_perturb_rate", 0.8) * k),
+            perturb_power=config.get("weight_perturb_power", 0.5) * k,
+            replace_rate=min(1.0, config.get("weight_replace_rate", 0.1) * k),
+            weight_range=config.get("weight_range", 4.0),
         )
 
-        if random.random() < config.get("add_node_rate", 0.03):
-            self.mutate_add_node(config.get("activation_options"))
+        if chance(config.get("add_node_rate", 0.03)):
+            self.mutate_add_node(config.get("activation_options"), innovations,
+                                 config.get("split_input_weight_range"))
 
-        if random.random() < config.get("add_connection_rate", 0.05):
-            self.mutate_add_connection()
+        if chance(config.get("add_connection_rate", 0.05)):
+            self.mutate_add_connection(weight_range=config.get("new_weight_range", 2.0))
 
-        if random.random() < config.get("activation_mutation_rate", 0.1):
+        if chance(config.get("activation_mutation_rate", 0.1)):
             self.mutate_activation(config.get("activation_options"))
 
-        if random.random() < config.get("toggle_enable_rate", 0.01):
+        if chance(config.get("toggle_enable_rate", 0.01)):
             self.mutate_toggle_enable()
 
         if random.random() < 0.08:
@@ -262,23 +336,28 @@ def crossover(parent1: Genome, parent2: Genome, child_key: int) -> Genome:
         if k not in child.nodes:
             child.nodes[k] = copy.copy(v)
 
-    # Align connections by key
-    all_conn_keys = set(parent1.connections.keys()) | set(parent2.connections.keys())
-    for conn_key in all_conn_keys:
-        in_p1 = conn_key in parent1.connections
-        in_p2 = conn_key in parent2.connections
-
-        if in_p1 and in_p2:
-            # Matching gene: inherit randomly
-            if random.random() < 0.5:
-                child.connections[conn_key] = copy.copy(parent1.connections[conn_key])
-            else:
-                child.connections[conn_key] = copy.copy(parent2.connections[conn_key])
-        elif in_p1:
-            # Disjoint/excess from fitter parent
-            child.connections[conn_key] = copy.copy(parent1.connections[conn_key])
-        elif parent1.fitness == parent2.fitness:
-            child.connections[conn_key] = copy.copy(parent2.connections[conn_key])
+    # Align connections by key.  The fitter parent's genes go in first; a gene
+    # taken from the other parent is skipped if it would close a loop (each
+    # parent is acyclic, but their union need not be).
+    inputs, outputs = set(child.input_keys), set(child.output_keys)
+    for conn_key in sorted(parent1.connections, key=lambda k: k not in parent2.connections):
+        src = parent1.connections[conn_key]
+        if conn_key in parent2.connections and random.random() < 0.5:
+            src = parent2.connections[conn_key]
+        child.connections[conn_key] = copy.copy(src)
+        if conn_key in parent2.connections:
+            # NEAT: a gene disabled in either parent is usually disabled.
+            either_off = not (parent1.connections[conn_key].enabled
+                              and parent2.connections[conn_key].enabled)
+            child.connections[conn_key].enabled = not (either_off and random.random() < 0.75)
+    if parent1.fitness == parent2.fitness:
+        for conn_key, conn in parent2.connections.items():
+            if conn_key in child.connections:
+                continue
+            s, d = conn_key
+            if s not in inputs and d not in outputs and _reaches(child.connections, d, s):
+                continue
+            child.connections[conn_key] = copy.copy(conn)
 
     p = parent1 if random.random() < 0.5 else parent2
     child.comp_focal_x = p.comp_focal_x
@@ -313,3 +392,22 @@ def compatibility_distance(
         w_diff = 0.0
 
     return (c1 * len(disjoint_excess) / n) + (c3 * w_diff)
+
+
+def _reaches(connections: dict, start: int, target: int) -> bool:
+    """Is ``target`` reachable from ``start`` over any connection (enabled or not)?"""
+    if start == target:
+        return True
+    adj: dict[int, list[int]] = {}
+    for s, d in connections:
+        adj.setdefault(s, []).append(d)
+    seen = {start}
+    stack = [start]
+    while stack:
+        for nxt in adj.get(stack.pop(), ()):
+            if nxt == target:
+                return True
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return False

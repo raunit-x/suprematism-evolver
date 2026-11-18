@@ -88,6 +88,8 @@ class Reproducer:
         pop_size: int,
         mutation_config: dict | None = None,
         genome_counter: list[int] | None = None,
+        innovations=None,
+        strength: float = 1.0,
     ) -> list[Genome]:
         """Produce next generation via fitness-proportionate selection + NEAT reproduction."""
         if genome_counter is None:
@@ -95,6 +97,11 @@ class Reproducer:
 
         if mutation_config is None:
             mutation_config = self.config
+
+        # Species with no fitness at all (nothing in them was any good) get no
+        # offspring while any species has some.
+        if any(s.adjusted_fitness > 0 for s in species_list):
+            species_list = [s for s in species_list if s.adjusted_fitness > 0]
 
         # Calculate offspring allocation per species
         total_adjusted = sum(s.adjusted_fitness for s in species_list)
@@ -115,12 +122,15 @@ class Reproducer:
             if n_offspring <= 0:
                 continue
 
-            # Sort by fitness (descending)
+            # Sort by fitness (descending); zero-fitness members don't breed
+            # when the species has anything better.
             members = sorted(
                 species.members,
                 key=lambda g: g.fitness or 0.0,
                 reverse=True,
             )
+            if (members[0].fitness or 0.0) > 0:
+                members = [m for m in members if (m.fitness or 0.0) > 0]
 
             # Elitism: preserve top individual(s)
             for i in range(min(elitism, len(members), n_offspring)):
@@ -144,7 +154,7 @@ class Reproducer:
                     child.key = genome_counter[0]
 
                 genome_counter[0] += 1
-                child.mutate(mutation_config)
+                child.mutate(mutation_config, innovations, strength)
                 offspring.append(child)
 
         # Trim or pad to exact pop_size
@@ -154,7 +164,7 @@ class Reproducer:
             child = parent.copy()
             child.key = genome_counter[0]
             genome_counter[0] += 1
-            child.mutate(mutation_config)
+            child.mutate(mutation_config, innovations, strength)
             offspring.append(child)
 
         return offspring[:pop_size]

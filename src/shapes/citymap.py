@@ -848,6 +848,29 @@ def _radial_cells(hub: dict, dom, street: float) -> list[tuple[Poly, float | Non
     return cells
 
 
+def _edge_aligned(district: Poly, ang: float, rng: random.Random) -> float:
+    """Most districts lay their streets along their own longest edge (the
+    nearest of its four right-angle turns to the gene direction), so the
+    blocks on that side are whole rectangles instead of shards."""
+    if rng.random() >= 0.75:
+        return ang
+    xs = [p[0] for p in district]
+    ys = [p[1] for p in district]
+    lo_x, hi_x, lo_y, hi_y = min(xs), max(xs), min(ys), max(ys)
+
+    def on_frame(a, b):          # an edge of the sheet, not a street
+        return any(abs(a[i] - v) < 1e-6 and abs(b[i] - v) < 1e-6
+                   for i, v in ((0, lo_x), (0, hi_x), (1, lo_y), (1, hi_y)))
+    edges = [i for i in range(len(district)) if not on_frame(district[i - 1], district[i])]
+    if not edges:
+        return ang
+    k = max(edges, key=lambda i: math.dist(district[i], district[i - 1]))
+    (x0, y0), (x1, y1) = district[k - 1], district[k]
+    e = math.atan2(y1 - y0, x1 - x0)
+    q = math.pi / 2
+    return e + round((ang - e) / q) * q
+
+
 def _districts(g: CityGenome, dom) -> list[tuple[Poly, float | None]]:
     if g.plan == "radial" and g.hub:
         polys = _radial_cells(g.hub, dom, g.street)
@@ -874,6 +897,7 @@ class Lot:
     poly: Poly
     color: int
     kind: str = "lot"
+    group: int = -1          # the block (or split cell) the lot belongs to
 
 
 @dataclass
@@ -885,6 +909,13 @@ class _Fill:
     voids: float
     slabs: float
     rng: random.Random
+    groups: list | None = None   # if set, the block id of every emitted shape
+    gid: int = 0
+
+    def add(self, out: list, item, gid: int) -> None:
+        out.append(item)
+        if self.groups is not None:
+            self.groups.append(gid)
 
 
 def _rect(u: tuple, v: tuple, a0, a1, b0, b1) -> Poly:
@@ -921,11 +952,13 @@ def _block(district: Poly, u: tuple, v: tuple, a0, a1, b0, b1, f: _Fill,
     whole = _clip_convex(_rect(u, v, a0, a1, b0, b1), district)
     if len(whole) < 3 or abs(_area(whole)) < (lot * 0.4) ** 2:
         return
+    f.gid += 1
+    gid = f.gid
     r = rng.random()
     if r < f.voids:
         return
     if r < f.voids + f.solid:
-        out.append((whole, "solid"))
+        f.add(out, (whole, "solid"), gid)
         return
     gap = f.street * 0.32
     long_u = (a1 - a0) >= (b1 - b0)
@@ -933,10 +966,13 @@ def _block(district: Poly, u: tuple, v: tuple, a0, a1, b0, b1, f: _Fill,
     d0, d1 = (b0, b1) if long_u else (a0, a1)
 
     def emit(s0, s1, e0, e1, kind):
-        poly = _rect(u, v, s0, s1, e0, e1) if long_u else _rect(u, v, e0, e1, s0, s1)
-        poly = _clip_convex(poly, district)
-        if len(poly) >= 3 and abs(_area(poly)) > (gap * 2) ** 2:
-            out.append((poly, kind))
+        full = _rect(u, v, s0, s1, e0, e1) if long_u else _rect(u, v, e0, e1, s0, s1)
+        poly = _clip_convex(full, district)
+        # A building cut down to a sliver by the district edge is left out:
+        # the block ends cleanly instead of in shards.
+        if len(poly) >= 3 and abs(_area(poly)) > (gap * 2) ** 2 \
+                and abs(_area(poly)) >= 0.45 * abs(_area(full)):
+            f.add(out, (poly, kind), gid)
 
     if rng.random() < f.slabs:
         # Constructivist superblock: long slab buildings in open ground.
@@ -986,7 +1022,7 @@ def _block(district: Poly, u: tuple, v: tuple, a0, a1, b0, b1, f: _Fill,
 
 
 def _lots_split(poly: Poly, ang: float, target: float, f: _Fill,
-                out: list[tuple[Poly, str]], level: int = 0) -> None:
+                out: list[tuple[Poly, str]], level: int = 0, gid: int = 0) -> None:
     """Substrate-style recursive splitting along two orthogonal directions."""
     if len(out) > MAX_LOTS:
         return
@@ -1002,7 +1038,7 @@ def _lots_split(poly: Poly, ang: float, target: float, f: _Fill,
             r = rng.random()
             if r < f.voids * 0.5:
                 return
-            out.append((poly, "solid" if area > target * 2.5 and r < 0.5 else "lot"))
+            f.add(out, (poly, "solid" if area > target * 2.5 and r < 0.5 else "lot"), gid)
         return
     # Cut across the longer extent, somewhere off-centre.
     nx, ny, lo, hi = (ux, uy, *eu) if lu >= lv else (vx, vy, *ev)
@@ -1010,7 +1046,10 @@ def _lots_split(poly: Poly, ang: float, target: float, f: _Fill,
     gap = f.street * (1.0 if level < 3 else 0.55 if level < 6 else 0.32)
     for half in _split(poly, nx, ny, lo + (hi - lo) * t, gap):
         if len(half) >= 3:
-            _lots_split(half, ang, target, f, out, level + 1)
+            if level < 3:                     # cells of the first cuts are "blocks"
+                f.gid += 1
+                gid = f.gid
+            _lots_split(half, ang, target, f, out, level + 1, gid)
 
 
 def _circle(cx: float, cy: float, rx: float, ry: float, u: tuple, a0: float = 0.0,
@@ -1094,6 +1133,7 @@ def express_city(g: CityGenome, domain=(0.0, 0.0, 1.0, 1.0)) -> list[Lot]:
             ang = hint + drng.gauss(0, 0.02)
         else:
             ang = base + drng.choice([0, 0, 0, math.pi / 2, spread, -spread]) + drng.gauss(0, 0.03)
+            ang = _edge_aligned(district, ang, drng)
         # Neighbourhood character from the zones covering this district.
         cx = sum(p[0] for p in district) / len(district)
         cy = sum(p[1] for p in district) / len(district)
@@ -1112,7 +1152,8 @@ def express_city(g: CityGenome, domain=(0.0, 0.0, 1.0, 1.0)) -> list[Lot]:
                      street=street * (0.8 if "fine" in kinds else 1.0),
                      solid=0.55 if "solid" in kinds else g.solid, voids=g.voids,
                      slabs=0.85 if "slabs" in kinds else
-                     _clamp(g.slabs * drng.uniform(0.6, 1.4), 0, 1), rng=rng)
+                     _clamp(g.slabs * drng.uniform(0.6, 1.4), 0, 1), rng=rng,
+                     groups=[], gid=d_i * 1_000_000)
         shapes: list[tuple[Poly, str]] = []
         if "substrate" in kinds or (drng.random() < g.irregular and "slabs" not in kinds):
             _lots_split(district, ang, (fill.lot * 1.6) ** 2, fill, shapes)
@@ -1127,13 +1168,23 @@ def express_city(g: CityGenome, domain=(0.0, 0.0, 1.0, 1.0)) -> list[Lot]:
             if z["kind"] == "tint" and z.get("color", -1) != g.ground:
                 dw[z["color"] % N_COLORS] = max(dw[z["color"] % N_COLORS], 1.0) * 4.0
         prev = -1
+        groups = fill.groups
         if g.prims and g.prim_share > 0:
+            # Whole blocks take one primitive (a row of rotundas, a terrace
+            # of half-rounds), so shapes repeat in rhythm instead of
+            # scattering one by one.
             prng = random.Random(g.seed * 7 + d_i * 131)
             unit2 = (lot_size * 0.9) ** 2
-            shapes = [_primitive(pl, prng.choice(g.prims), ang, prng)
-                      if kd != "slab" and abs(_area(pl)) > unit2 and prng.random() < g.prim_share
-                      else (pl, kd) for pl, kd in shapes]
-        for poly, kind in shapes:
+            pick: dict[int, str | None] = {}
+            for gi in groups:
+                if gi not in pick:
+                    pick[gi] = prng.choice(g.prims) if prng.random() < g.prim_share else None
+            # One orientation per block too (all half-rounds face the same
+            # street), so a block reads as one designed terrace.
+            shapes = [_primitive(pl, pick[gi], ang, random.Random(g.seed * 13 + gi))
+                      if pick[gi] and kd != "slab" and abs(_area(pl)) > unit2
+                      else (pl, kd) for (pl, kd), gi in zip(shapes, groups)]
+        for (poly, kind), gi in zip(shapes, groups):
             w = list(dw)
             if kind in ("solid", "slab"):
                 # Large masses and slabs: mostly black or the lead colour.
@@ -1143,7 +1194,7 @@ def express_city(g: CityGenome, domain=(0.0, 0.0, 1.0, 1.0)) -> list[Lot]:
                 w[prev] *= 0.25                    # neighbours rarely match
             idx = crng.choices(range(N_COLORS), weights=w)[0]
             prev = idx
-            lots.append(Lot(poly, idx, kind))
+            lots.append(Lot(poly, idx, kind, gi))
         if len(lots) > MAX_LOTS:
             break
     return lots
@@ -1256,6 +1307,7 @@ def _district_angles(g: CityGenome) -> list[tuple[Poly, float, float, float]]:
             ang = hint + drng.gauss(0, 0.02)
         else:
             ang = base + drng.choice([0, 0, 0, math.pi / 2, spread, -spread]) + drng.gauss(0, 0.03)
+            ang = _edge_aligned(district, ang, drng)
         for z in g.zones:
             if z["kind"] == "turn" and (math.hypot(cx - z["x"], cy - z["y"]) < z["r"]
                                         or _inside(district, z["x"], z["y"])):
@@ -1478,6 +1530,115 @@ def _site_landmarks(g: CityGenome, street: float) -> tuple[list[dict], list[dict
     return placed_c, placed_p
 
 
+class _Clearance:
+    """Where the city stands back: every road, railway, water body, ring
+    road and landmark, widened by a margin.  Buildings that touch it are
+    left out whole, so features sit in clean ground, never on top of
+    half-hidden blocks."""
+
+    def __init__(self, iw: int, ih: int, side: float, ox: float, oy: float):
+        self.q = min(1.0, 1100.0 / max(iw, ih))
+        self.side, self.ox, self.oy = side, ox, oy
+        self.img = Image.new("L", (max(1, int(iw * self.q)), max(1, int(ih * self.q))), 0)
+        self.draw = ImageDraw.Draw(self.img)
+        self.arr = None
+
+    def px(self, p):
+        return ((self.ox + p[0] * self.side) * self.q, (self.oy + p[1] * self.side) * self.q)
+
+    def line(self, pts, width_u):
+        w = max(1, int(math.ceil(width_u * self.side * self.q)))
+        pp = [self.px(p) for p in pts]
+        self.draw.line(pp, fill=255, width=w)
+        r = w / 2
+        for x, y in pp[:: max(1, len(pp) // 60)] + pp[-1:]:
+            self.draw.ellipse([x - r, y - r, x + r, y + r], fill=255)
+
+    def polygon(self, pts):
+        if len(pts) >= 3:
+            self.draw.polygon([self.px(p) for p in pts], fill=255)
+
+    def disc(self, c, r):
+        x, y = self.px(c)
+        q = r * self.side * self.q
+        self.draw.ellipse([x - q, y - q, x + q, y + q], fill=255)
+
+    def ring(self, c, r, width_u):
+        x, y = self.px(c)
+        q = r * self.side * self.q
+        self.draw.ellipse([x - q, y - q, x + q, y + q], outline=255,
+                          width=max(1, int(math.ceil(width_u * self.side * self.q))))
+
+    def hits(self, pts) -> bool:
+        if self.arr is None:
+            self.arr = np.asarray(self.img) > 0
+        xs = [self.px(p) for p in pts]
+        h, w = self.arr.shape
+        bx0 = max(0, int(min(x for x, _ in xs)))
+        by0 = max(0, int(min(y for _, y in xs)))
+        bx1 = min(w, int(max(x for x, _ in xs)) + 2)
+        by1 = min(h, int(max(y for _, y in xs)) + 2)
+        if bx1 <= bx0 or by1 <= by0:
+            return False
+        win = self.arr[by0:by1, bx0:bx1]
+        if not win.any():
+            return False
+        fp = Image.new("L", (bx1 - bx0, by1 - by0), 0)
+        ImageDraw.Draw(fp).polygon([(x - bx0, y - by0) for x, y in xs], fill=255)
+        return bool((win & (np.asarray(fp) > 0)).any())
+
+
+def _clearance(g: CityGenome, sited_c: list[dict], sited_p: list[dict], street: float,
+               domain, iw: int, ih: int, side: float, ox: float, oy: float) -> _Clearance:
+    m = _Clearance(iw, ih, side, ox, oy)
+    gap = street * 1.2                                   # set-back from every feature
+    for w in g.waters:
+        kind = w.get("kind", "river")
+        if kind == "lake":
+            lobes = w["lobes"]
+            ctrl = [(w["x"] + w["r"] * l * math.cos(2 * math.pi * k / len(lobes)),
+                     w["y"] + w["r"] * l * math.sin(2 * math.pi * k / len(lobes)))
+                    for k, l in enumerate(lobes)]
+            shore = _catmull(ctrl, 16, closed=True)
+            m.polygon(shore)
+            m.line(shore + shore[:1], 2 * gap)
+        elif kind == "coast":
+            curve = _catmull(w["pts"], 40)
+            sgn = w.get("side", 1)
+            far = [(p[0] + n[0] * sgn * 3, p[1] + n[1] * sgn * 3) for p, _, n in _frames(curve)]
+            m.polygon(curve + far[::-1])
+            m.line(curve, 2 * gap)
+        else:
+            m.line(_catmull(w["pts"], 40), w["width"] + 2 * gap)
+    for av in g.avenues:
+        m.line(_catmull(av["pts"], 30), av["width"] + 2 * gap)
+    for rl in g.rails:
+        m.line(_catmull(rl["pts"], 40), street * 2.6 + 2 * gap)
+    if g.plan == "radial" and g.hub:
+        h = g.hub
+        radii = _ring_radii(h, domain)
+        m.disc((h["x"], h["y"]), radii[0] + gap)
+        for r in radii[1::max(1, len(radii) // 4)]:
+            m.ring((h["x"], h["y"]), r + street * 0.9 + gap, street * 1.8 + 2 * gap)
+    for c in sited_c:
+        a = math.radians(c.get("angle", 0.0))
+        kind = c.get("kind")
+        W, H = c["w"] / 2, c["h"] / 2
+        if kind in ("circus", "planetarium"):
+            m.disc((c["x"], c["y"]), max(W, H) + street + gap)
+        else:
+            if kind == "gasworks":
+                H = W
+            m.polygon(_footprint(c["x"], c["y"], W + street + gap, H + street + gap, a, False))
+    for pz in sited_p:
+        R = pz["r"] + street + gap
+        if pz.get("shape") == "square":
+            m.polygon(_footprint(pz["x"], pz["y"], R, R, math.radians(pz.get("angle", 0.0)), False))
+        else:
+            m.disc((pz["x"], pz["y"]), R)
+    return m
+
+
 def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
                 grain: float = 8.0) -> Image.Image:
     """Paint the map.  The unit square maps to the centred square of the
@@ -1491,7 +1652,13 @@ def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
     pal = [_pigment(c) for c in palette]
     col = lambda i: pal[i % len(pal)]                         # noqa: E731
     ground = col(g.ground)
-    water = ground if g.water_color < 0 else col(g.water_color)
+    if g.water_color < 0:
+        # "Ground-coloured" water is a quiet tone of the ground, never the
+        # ground itself, so bridges and piers have something to span.
+        gl = 0.299 * ground[0] + 0.587 * ground[1] + 0.114 * ground[2]
+        water = _mixc(ground, (250, 246, 236), 0.10) if gl < 110 else _mixc(ground, (18, 17, 18), 0.12)
+    else:
+        water = col(g.water_color)
     img = Image.new("RGB", (iw, ih), ground)
     draw = ImageDraw.Draw(img)
     rng = random.Random(g.color_seed ^ 0x5F3759DF)
@@ -1533,7 +1700,54 @@ def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
     orng = random.Random(g.seed ^ 0x9E3779B9)
     trng = random.Random(g.color_seed ^ 0x1234567)
     lot_unit = max(0.0085, g.lot * z)
+    sited_complexes, sited_plazas = _site_landmarks(g, street)
+    clear = _clearance(g, sited_complexes, sited_plazas, street, domain, iw, ih, side, ox, oy)
     lots = express_city(g, domain)
+
+    # Heights: each block has one storey count, its lots step a little
+    # around it, and nothing rises much above its own width, so blocks read
+    # as built rows rather than towers toppling onto their neighbours.
+    heights = [0.0] * len(lots)
+    va = math.radians(g.view)
+    ev = (math.cos(va), math.sin(va))                      # roofs lift this way
+    if g.relief > 0:
+        hrng = random.Random(g.seed ^ 0x51ED27)
+        block_h: dict[int, float] = {}
+        for i, lot in enumerate(lots):
+            if lot.group not in block_h:
+                block_h[lot.group] = min(2.6, math.exp(hrng.gauss(0, 0.5)))
+            f = block_h[lot.group] * (1.0 + 0.18 * hrng.choice((-1, 0, 0, 1)))
+            f *= {"solid": 1.4, "slab": 1.25, "disc": 1.4, "ring": 1.3}.get(lot.kind, 1.0)
+            perim = sum(math.dist(lot.poly[k], lot.poly[k - 1]) for k in range(len(lot.poly)))
+            short = 2 * abs(_area(lot.poly)) / max(perim, 1e-9)    # ~ the lot's width
+            heights[i] = min(f * g.relief * lot_unit * 0.6, short * 1.1)
+
+    def body(pts, h):
+        return pts if h <= 0 else _hull(list(pts) + [(x + ev[0] * h, y + ev[1] * h) for x, y in pts])
+
+    # Buildings touching a feature are left out; a big one is first re-cut
+    # into smaller buildings, and the pieces that stand clear are kept, so
+    # the city meets roads and landmarks with a clean, finer edge.
+    keep = []
+    srng = random.Random(g.seed ^ 0x3C6EF372)
+    for lot, h in zip(lots, heights):
+        if not clear.hits(body(lot.poly, h)):
+            keep.append((lot, h))
+            continue
+        if len(lot.poly) > 6 or abs(_area(lot.poly)) < (lot_unit * 1.6) ** 2:
+            continue
+        k = max(range(len(lot.poly)), key=lambda i: math.dist(lot.poly[i], lot.poly[i - 1]))
+        (x0, y0), (x1, y1) = lot.poly[k - 1], lot.poly[k]
+        pieces: list[tuple[Poly, str]] = []
+        _lots_split(_ccw(list(lot.poly)), math.atan2(y1 - y0, x1 - x0), (lot_unit * 0.9) ** 2,
+                    _Fill(lot=lot_unit * 0.7, street=street * 0.7, solid=0.0, voids=0.0,
+                          slabs=0.0, rng=srng), pieces)
+        for pc, _ in pieces:
+            ph = h * 0.8
+            if abs(_area(pc)) > (street * 1.5) ** 2 and not clear.hits(body(pc, ph)):
+                keep.append((Lot(pc, lot.color, "lot", lot.group), ph))
+    lots = [lt for lt, _ in keep]
+    heights = [h for _, h in keep]
     colours = []
     for lot in lots:
         c = _vary(col(lot.color), rng, 0.035)
@@ -1543,16 +1757,8 @@ def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
         colours.append(c)
 
     if g.relief > 0 and lots:
-        va = math.radians(g.view)
-        ev = (math.cos(va), math.sin(va))                  # roofs lift this way
         sa = va + math.radians(80)
         sv = (math.cos(sa), math.sin(sa))                  # shadows fall this way
-        hrng = random.Random(g.seed ^ 0x51ED27)
-        heights = []
-        for lot in lots:
-            f = min(3.5, math.exp(hrng.gauss(0, 0.55)))
-            f *= {"solid": 1.8, "slab": 1.3, "disc": 1.7, "ring": 1.5}.get(lot.kind, 1.0)
-            heights.append(f * g.relief * lot_unit * 0.85)
         mask = Image.new("L", img.size, 0)
         md = ImageDraw.Draw(mask)
         for lot, h in zip(lots, heights):
@@ -1618,7 +1824,6 @@ def render_city(g: CityGenome, width: int, height: int, palette: list[tuple],
 
     # 3b. Large complexes, each with its own internal structure, sited
     # clear of water, avenues, railways and ring roads, on the local grid.
-    sited_complexes, sited_plazas = _site_landmarks(g, street)
     for cx in sited_complexes:
         _draw_complex(cx, g, col, poly, stroke, bar, ground, water, dark_on, street, side)
 

@@ -98,6 +98,50 @@ button{font-family:inherit}
 .route-link.active .n{color:var(--red);opacity:1}
 .route-link.active::after{transform:scaleX(1)}
 
+/* ---------- Lineage ---------- */
+.gal-wrap.lin-wrap{max-width:none}
+.lin-bar{display:flex;align-items:stretch;justify-content:space-between;gap:24px;border-bottom:1px solid var(--rule);margin:0 0 18px}
+.lin-bar .gal-filters{border-bottom:none;margin:0;flex:1;position:static}
+.lin-tools{display:flex;align-items:center;gap:22px;flex-shrink:0}
+.lin-zoom{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:.64rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.lin-zoom input{accent-color:var(--red);width:120px}
+.lin-legend{display:flex;flex-wrap:wrap;gap:8px 26px;list-style:none;margin:0 0 26px;padding:0;font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.lin-legend li{display:flex;align-items:center;gap:9px}
+.lin-legend i{display:inline-block;width:22px;height:12px}
+.lin-legend .k-pick{width:12px;border:2px solid var(--red)}
+.lin-legend .k-surv{height:0;border-top:3px solid var(--ink)}
+.lin-legend .k-child{height:0;border-top:1px solid var(--ink-2)}
+.lin-legend .k-new{width:8px;height:8px;background:var(--yellow)}
+.lin-legend .k-branch{height:0;border-top:2px dashed var(--blue)}
+.lin-scroll{overflow-x:auto;padding-bottom:12px}
+.lin-canvas{position:relative}
+.lin-canvas svg{position:absolute;inset:0;overflow:visible;pointer-events:none}
+.lin-edge{fill:none;stroke:var(--ink-3);stroke-width:1;opacity:.4;transition:opacity var(--fast) var(--ease),stroke var(--fast) var(--ease)}
+.lin-edge.surv{stroke:var(--ink);stroke-width:2.5;opacity:.8}
+.lin-edge.branch{stroke:var(--blue);stroke-width:2;stroke-dasharray:6 5;opacity:.85}
+.lin-cell{position:absolute;background:var(--paper-2);cursor:pointer;outline:1px solid transparent;transition:opacity var(--fast) var(--ease),transform var(--fast) var(--ease)}
+.lin-cell img{display:block;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 400ms var(--ease)}
+.lin-cell img.ok{opacity:1}
+.lin-cell.picked{outline:2px solid var(--red);outline-offset:2px}
+.lin-cell.new::after{content:'';position:absolute;top:-3px;right:-3px;width:7px;height:7px;background:var(--yellow)}
+.lin-cell:hover{transform:scale(1.08);z-index:3}
+.lin-cell.sel{outline:3px solid var(--blue);outline-offset:2px;z-index:3}
+.lin-canvas.focus .lin-cell:not(.lit){opacity:.16}
+.lin-canvas.focus .lin-edge:not(.lit){opacity:.05}
+.lin-canvas.focus .lin-edge.lit{stroke:var(--red);opacity:1}
+.lin-row{position:absolute;font-family:var(--mono);font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);line-height:1.5;white-space:nowrap}
+.lin-row b{display:block;font-family:var(--sans);font-stretch:66%;font-weight:900;font-size:1.25rem;letter-spacing:0;color:var(--ink)}
+.lin-row.now b{color:var(--red)}
+.lin-card{position:fixed;right:28px;bottom:28px;z-index:40;width:340px;background:var(--sheet);border:1.5px solid var(--ink-3);padding:16px 16px 18px;box-shadow:0 18px 50px rgba(0,0,0,.45)}
+.lin-card.hidden{display:none}
+.lin-card img{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:var(--paper-2);margin-bottom:12px}
+.lin-card-x{position:absolute;top:4px;right:8px;background:none;border:none;color:var(--ink-3);font-size:1.5rem;cursor:pointer}
+.lin-card-x:hover{color:var(--red)}
+.lin-card-title{font-family:var(--sans);font-stretch:66%;font-weight:900;text-transform:uppercase;font-size:1.5rem;line-height:1}
+.lin-card-info{font-family:var(--serif);font-style:italic;color:var(--ink-2);margin:6px 0 14px;font-size:1rem}
+.lin-card-msg{font-family:var(--mono);font-size:.62rem;letter-spacing:.06em;color:var(--yellow);margin-top:10px}
+.lin-card-msg:empty{display:none}
+
 /* ---------- Gallery ---------- */
 .gallery-page{overflow-y:auto}
 .gal-wrap{max-width:1600px;margin:0 auto;padding:56px 40px 120px}
@@ -262,10 +306,10 @@ button{font-family:inherit}
 .art-thumb:hover img{transform:scale(1.03)}
 .empty-state{font-family:var(--serif);font-style:italic;color:var(--ink-3);border:1px dashed var(--paper-3);padding:24px;text-align:center;font-size:1rem}
 
-.dual-style{display:grid;grid-template-columns:repeat(3,1fr);gap:0}
+.dual-style{display:grid;grid-template-columns:repeat(3,1fr);gap:56px 0}
 .style-panel{padding:0 28px;border-left:1px solid var(--rule)}
-.style-panel:first-child{padding-left:0;border-left:none}
-.style-panel:last-child{padding-right:0}
+.style-panel:nth-child(3n+1){padding-left:0;border-left:none}
+.style-panel:nth-child(3n){padding-right:0}
 .style-panel h4{display:flex;align-items:center;gap:12px;font-size:1.7rem;font-weight:800;line-height:1;margin-bottom:8px}
 .ic{width:26px;height:26px;flex-shrink:0;overflow:visible}
 .ic .cube polygon{stroke:var(--paper);stroke-width:.7;stroke-linejoin:round}
@@ -695,6 +739,7 @@ input[type="range"]:hover::-webkit-slider-thumb,input[type="range"]:active::-web
     <a href="/" class="route-link" data-route="home"><span class="n">01</span>Home</a>
     <a href="/evolve" class="route-link" data-route="evolve"><span class="n">02</span>Evolve</a>
     <a href="/gallery" class="route-link" data-route="gallery"><span class="n">03</span>Gallery</a>
+    <a href="/lineage" class="route-link" data-route="lineage"><span class="n">04</span>Lineage</a>
   </nav>
 </header>
 
@@ -829,8 +874,8 @@ input[type="range"]:hover::-webkit-slider-thumb,input[type="range"]:active::-web
         <div class="section-head">
           <span class="num">03</span>
           <div>
-            <h2>Three engines</h2>
-            <p>One loop, three visual languages.</p>
+            <h2>Six engines</h2>
+            <p>One loop, six visual languages.</p>
           </div>
           <button class="btn btn-ghost btn-sm" id="home-refresh">Refresh</button>
         </div>
@@ -841,7 +886,7 @@ input[type="range"]:hover::-webkit-slider-thumb,input[type="range"]:active::-web
             <div class="gallery-grid" id="home-malevich-grid"></div>
           </div>
           <div class="style-panel">
-            <h4><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><g class="fw cube" data-sym="120"><polygon data-dir="-90" points="12,12 3.34,7 12,2 20.66,7"/><polygon data-dir="30" points="12,12 20.66,7 20.66,17 12,22"/><polygon data-dir="150" points="12,12 12,22 3.34,17 3.34,7"/></g></svg>Architectons</h4>
+            <h4><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><g class="fw cube" data-sym="120"><polygon data-dir="-90" points="12,12 3.34,7 12,2 20.66,7"/><polygon data-dir="30" points="12,12 20.66,7 20.66,17 12,22"/><polygon data-dir="150" points="12,12 12,22 3.34,17 3.34,7"/></g></svg>Arkhitektons</h4>
             <p>Projected architectural volumes.</p>
             <div class="gallery-grid" id="home-hadid-grid"></div>
           </div>
@@ -849,6 +894,21 @@ input[type="range"]:hover::-webkit-slider-thumb,input[type="range"]:active::-web
             <h4><svg class="ic city" viewBox="0 0 24 24" aria-hidden="true"><circle class="ripple" cx="12" cy="12" r="3"/><circle class="ripple r2" cx="12" cy="12" r="3"/><g class="fw" data-sym="45" stroke="var(--blue)" stroke-width="1.3" stroke-linecap="square"><path d="M12 1.5V7.5M12 16.5V22.5M1.5 12H7.5M16.5 12H22.5M4.6 4.6 8.8 8.8M15.2 15.2 19.4 19.4M19.4 4.6 15.2 8.8M8.8 15.2 4.6 19.4"/></g><circle cx="12" cy="12" r="6.6" fill="none" stroke="var(--blue)" stroke-width="1.3"/><circle cx="12" cy="12" r="2.6" fill="var(--blue)"/></svg>City plans</h4>
             <p>Abstract master plans.</p>
             <div class="gallery-grid" id="home-maps-grid"></div>
+          </div>
+          <div class="style-panel">
+            <h4><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 21.5h20" stroke="var(--ink-3)" stroke-width="1.3"/><path d="M5 21.5V12a7 7 0 0 1 14 0v9.5" fill="none" stroke="var(--ochre, #c58b2a)" stroke-width="1.6"/><g class="fw" data-sym="360" data-cx="12" data-cy="12"><path d="M12 5.5 9 21.5h6z" fill="var(--red)"/></g></svg>Renaissance</h4>
+            <p>Sacred scenes in one-point perspective.</p>
+            <div class="gallery-grid" id="home-renaissance-grid"></div>
+          </div>
+          <div class="style-panel">
+            <h4><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><g class="fw" data-sym="180" fill="none" stroke-linecap="round"><path d="M2 8c4-4 8 4 12 0s6-3 8-1" stroke="var(--blue)" stroke-width="2"/><path d="M2 13c4-4 8 4 12 0s6-3 8-1" stroke="var(--red)" stroke-width="2"/><path d="M2 18c4-4 8 4 12 0s6-3 8-1" stroke="var(--ochre, #c58b2a)" stroke-width="2"/></g></svg>Flow</h4>
+            <p>Landscapes in streamline brushstrokes.</p>
+            <div class="gallery-grid" id="home-flow-grid"></div>
+          </div>
+          <div class="style-panel">
+            <h4><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><g class="fw" data-sym="90" data-cx="12" data-cy="12"><path d="M5 5 12 12M19 5 12 12M12 12V20" stroke="var(--ink-3)" stroke-width="1.2"/><circle cx="5" cy="5" r="2.6" fill="var(--red)"/><circle cx="19" cy="5" r="2.6" fill="var(--blue)"/><circle cx="12" cy="12" r="2.6" fill="var(--paper)" stroke="var(--ink-3)" stroke-width="1"/><circle cx="12" cy="20" r="2.6" fill="var(--ochre, #c58b2a)"/></g></svg>CPPN</h4>
+            <p>Evolved networks painting every pixel.</p>
+            <div class="gallery-grid" id="home-cppn-grid"></div>
           </div>
         </div>
       </section>
@@ -882,13 +942,21 @@ input[type="range"]:hover::-webkit-slider-thumb,input[type="range"]:active::-web
             <label for="sel-engine">Engine</label>
             <select id="sel-engine">
               <option value="shapes" selected>Shapes</option>
-              <option value="hadid">Hadid 3D</option>
+              <option value="hadid">Arkhitektons</option>
               <option value="maps">City Maps</option>
               <option value="renaissance">Renaissance</option>
               <option value="flow">Flow Landscape</option>
               <option value="cppn">CPPN</option>
             </select>
             <p class="control-help" id="engine-desc"></p>
+          </div>
+          <div class="control-row comp-only">
+            <label>Rendering</label>
+            <div class="segmented" role="radiogroup" aria-label="Arkhitekton rendering" id="ark-style">
+              <button type="button" role="radio" aria-checked="true" data-ark="painted" title="Painted on aged ground, in colour">Painted</button>
+              <button type="button" role="radio" aria-checked="false" data-ark="drawing" title="Pencil axonometric on kraft paper">Drawing</button>
+              <button type="button" role="radio" aria-checked="false" data-ark="plaster" title="White plaster model, photographed on black">Plaster</button>
+            </div>
           </div>
           <div class="control-row cppn-only">
             <label for="sel-mode">Mode</label>
@@ -1003,6 +1071,39 @@ input[type="range"]:hover::-webkit-slider-thumb,input[type="range"]:active::-web
       <p class="gal-empty" id="gal-empty" hidden>Nothing here yet. Use <b>Download all</b> in the workspace and your generations appear here.</p>
     </div>
   </section>
+
+  <section class="page gallery-page" id="page-lineage">
+    <div class="gal-wrap lin-wrap">
+      <header class="gal-head">
+        <h1>Lineage</h1>
+        <p class="gal-count" id="lin-count"></p>
+      </header>
+      <div class="lin-bar">
+        <nav class="gal-filters lin-runs" id="lin-runs" aria-label="Runs"></nav>
+        <div class="lin-tools">
+          <button class="chip" id="lin-mode" aria-pressed="false">Lineage only</button>
+          <label class="lin-zoom">Size <input type="range" id="lin-zoom" min="36" max="150" value="64"></label>
+        </div>
+      </div>
+      <ul class="lin-legend">
+        <li><i class="k-pick"></i>Picked by you</li>
+        <li><i class="k-surv"></i>Carried over unchanged</li>
+        <li><i class="k-child"></i>Bred: one line per parent</li>
+        <li><i class="k-new"></i>Newcomer, no parents</li>
+        <li><i class="k-branch"></i>Branch: went back and bred again</li>
+      </ul>
+      <div class="lin-scroll" id="lin-scroll"><div class="lin-canvas" id="lin-canvas"></div></div>
+      <p class="gal-empty" id="lin-empty" hidden>No lineage yet. Pick favourites on <b>Evolve</b> and breed a few generations: every generation, and every branch, shows up here.</p>
+    </div>
+    <aside class="lin-card hidden" id="lin-card" aria-live="polite">
+      <button class="lin-card-x" id="lin-card-x" aria-label="Close">&times;</button>
+      <img id="lin-card-img" alt="">
+      <p class="lin-card-title" id="lin-card-title"></p>
+      <p class="lin-card-info" id="lin-card-info"></p>
+      <button class="btn btn-primary btn-sm" id="lin-continue">Continue evolving from this generation <span class="arrow">&rarr;</span></button>
+      <p class="lin-card-msg" id="lin-card-msg"></p>
+    </aside>
+  </section>
 </div>
 
 <div class="lightbox hidden" id="lightbox" role="dialog" aria-modal="true" aria-label="Painting">
@@ -1050,6 +1151,7 @@ const $ = s => document.querySelector(s);
 const pageHome = $('#page-home');
 const pageEvolve = $('#page-evolve');
 const pageGallery = $('#page-gallery');
+const pageLineage = $('#page-lineage');
 const routeLinks = [...document.querySelectorAll('.route-link')];
 const homeStart = $('#home-start');
 const homeRefresh = $('#home-refresh');
@@ -1058,6 +1160,9 @@ const homeLiveGrid = $('#home-live-grid');
 const homeMalevichGrid = $('#home-malevich-grid');
 const homeHadidGrid = $('#home-hadid-grid');
 const homeMapsGrid = $('#home-maps-grid');
+const homeRenaissanceGrid = $('#home-renaissance-grid');
+const homeFlowGrid = $('#home-flow-grid');
+const homeCppnGrid = $('#home-cppn-grid');
 const homeGen = $('#home-gen');
 const homePop = $('#home-pop');
 const homeLiveMeta = $('#home-live-meta');
@@ -1136,7 +1241,7 @@ async function apiFetch(url, body, withLoading = true){
 }
 
 function engineLabel(engine){
-  if(engine === 'hadid') return 'Hadid 3D';
+  if(engine === 'hadid') return 'Arkhitektons';
   if(engine === 'maps') return 'City Maps';
   if(engine === 'renaissance') return 'Renaissance';
   if(engine === 'flow') return 'Flow Landscape';
@@ -1146,7 +1251,7 @@ function engineLabel(engine){
 
 const ENGINE_DESC = {
   shapes: 'Flat Suprematist compositions after Malevich.',
-  hadid: 'Floating 3D architectons after Zaha Hadid.',
+  hadid: 'Floating 3D arkhitektons after Malevich and Zaha Hadid.',
   maps: 'Abstract city plans: blocks, roads, rivers.',
   renaissance: 'Sacred scenes in glazed oil, with perspective and light.',
   cppn: 'Patterns grown by small neural networks.',
@@ -1241,6 +1346,7 @@ function renderGrid(data){
     slCrossover.value = data.crossover_rate;
     crossoverVal.textContent = Math.round(data.crossover_rate * 100) + '%';
   }
+  if(data.ark_style) setArkStyleUI(data.ark_style);
   if(data.grain_strength !== undefined){
     slGrain.value = data.grain_strength;
     grainVal.textContent = Math.round(data.grain_strength);
@@ -1423,6 +1529,9 @@ async function loadHomeContent(forceSampleRefresh = false){
   renderHomeGallery(homeMalevichGrid, samples.malevich || []);
   renderHomeGallery(homeHadidGrid, samples.hadid || []);
   renderHomeGallery(homeMapsGrid, samples.maps || []);
+  renderHomeGallery(homeRenaissanceGrid, samples.renaissance || []);
+  renderHomeGallery(homeFlowGrid, samples.flow || []);
+  renderHomeGallery(homeCppnGrid, samples.cppn || []);
   startHeroMosaic(samples);
   if(!lab.loaded) labLoad();
 }
@@ -1464,7 +1573,8 @@ heroMosaic.addEventListener('click', () => setRoute('evolve', true));
 heroMosaic.addEventListener('keydown', e => { if(e.key === 'Enter') setRoute('evolve', true); });
 
 function routeFromPath(pathname){
-  return pathname.startsWith('/evolve') ? 'evolve' : pathname.startsWith('/gallery') ? 'gallery' : 'home';
+  return pathname.startsWith('/evolve') ? 'evolve' : pathname.startsWith('/gallery') ? 'gallery'
+       : pathname.startsWith('/lineage') ? 'lineage' : 'home';
 }
 
 async function setRoute(route, push = true){
@@ -1472,10 +1582,13 @@ async function setRoute(route, push = true){
   pageHome.classList.toggle('active', route === 'home');
   pageEvolve.classList.toggle('active', route === 'evolve');
   pageGallery.classList.toggle('active', route === 'gallery');
+  pageLineage.classList.toggle('active', route === 'lineage');
+  if(route !== 'lineage') linCard.classList.add('hidden');
   routeLinks.forEach(link => link.classList.toggle('active', link.dataset.route === route));
 
   if(push){
-    const target = route === 'evolve' ? '/evolve' : route === 'gallery' ? '/gallery' : '/';
+    const target = route === 'evolve' ? '/evolve' : route === 'gallery' ? '/gallery'
+                 : route === 'lineage' ? '/lineage' : '/';
     if(window.location.pathname !== target){
       history.pushState({ route }, '', target);
     }
@@ -1485,10 +1598,303 @@ async function setRoute(route, push = true){
     await loadHomeContent();
   } else if(route === 'gallery'){
     await loadGallery();
+  } else if(route === 'lineage'){
+    await loadLineage();
   } else if(!evolveLoaded){
     await loadState();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Lineage: every generation of every run, branches included.  Generations
+// are rows (top = first); going back and breeding again opens a new lane to
+// the right.  Lines join each individual to its parent(s) one row up.
+// ---------------------------------------------------------------------------
+const linCanvas = $('#lin-canvas');
+const linRuns = $('#lin-runs');
+const linCount = $('#lin-count');
+const linEmpty = $('#lin-empty');
+const linMode = $('#lin-mode');
+const linZoom = $('#lin-zoom');
+const linCard = $('#lin-card');
+const SVGNS = 'http://www.w3.org/2000/svg';
+let linData = null, linRun = null, linOnly = false, linSel = null, linScrolled = null, linZoomSet = false;
+let linRel = null;          // { parents: key -> [key], children: key -> [key], cells, edges }
+
+const linObserver = new IntersectionObserver(entries => entries.forEach(e => {
+  if(!e.isIntersecting) return;
+  const img = e.target.querySelector('img');
+  if(img && !img.src){ img.onload = () => img.classList.add('ok'); img.src = img.dataset.src; }
+  linObserver.unobserve(e.target);
+}), { rootMargin: '400px' });
+
+async function loadLineage(){
+  linData = await apiFetch('/api/lineage', undefined, false);
+  const runs = linData.runs;
+  const hasCurrent = runs.find(r => r.nodes.some(n => n.sid === linData.current));
+  if(!runs.some(r => r.run === linRun)) linRun = hasCurrent ? hasCurrent.run : (runs.at(-1)?.run ?? null);
+  linRuns.innerHTML = runs.map(r =>
+    `<button class="chip" data-run="${r.run}" aria-pressed="${r.run === linRun}">Run ${r.run} &middot; ${engineLabel(r.engine)}<sup>${r.nodes.length}</sup></button>`
+  ).join('');
+  linEmpty.hidden = runs.some(r => r.nodes.length > 1);
+  if(!linZoomSet){
+    // Until the slider is touched, size thumbnails so a generation fits across.
+    const run = runs.find(r => r.run === linRun);
+    const n = run ? Math.max(...run.nodes.map(x => x.n)) : 24;
+    const w = $('#lin-scroll').clientWidth - 64;
+    linZoom.value = Math.max(36, Math.min(110, Math.floor(w / n / 1.08)));
+  }
+  drawLineageTree();
+}
+
+linRuns.addEventListener('click', e => {
+  const b = e.target.closest('[data-run]');
+  if(!b) return;
+  linRun = +b.dataset.run;
+  linRuns.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c === b));
+  closeLinCard();
+  drawLineageTree();
+});
+linMode.addEventListener('click', () => {
+  linOnly = !linOnly;
+  linMode.setAttribute('aria-pressed', linOnly);
+  drawLineageTree();
+});
+let linZoomRaf = 0;
+linZoom.addEventListener('input', () => {
+  linZoomSet = true;
+  cancelAnimationFrame(linZoomRaf);
+  linZoomRaf = requestAnimationFrame(drawLineageTree);
+});
+
+function drawLineageTree(){
+  linCanvas.innerHTML = '';
+  linRel = null;
+  const run = linData && linData.runs.find(r => r.run === linRun);
+  if(!run){ linCount.textContent = ''; linCanvas.style.cssText = ''; return; }
+  const nodes = run.nodes, byId = new Map(nodes.map(n => [n.sid, n]));
+  const kids = new Map();
+  nodes.forEach(n => { if(n.parent != null && byId.has(n.parent)) (kids.get(n.parent) || kids.set(n.parent, []).get(n.parent)).push(n); });
+  const K = (sid, i) => sid + ':' + i;
+
+  // Relations between individuals across generations.
+  const parentsOf = new Map(), childrenOf = new Map();
+  nodes.forEach(n => {
+    if(n.parent == null || !byId.has(n.parent)) return;
+    n.parents.forEach((ps, i) => {
+      const k = K(n.sid, i);
+      parentsOf.set(k, ps.map(p => K(n.parent, p)));
+      ps.forEach(p => (childrenOf.get(K(n.parent, p)) || childrenOf.set(K(n.parent, p), []).get(K(n.parent, p))).push(k));
+    });
+  });
+
+  // Lanes: the main line (the generations you're on) stays in lane 0;
+  // every other branch opens a lane to the right.
+  let lanes = 0, maxDepth = 0;
+  const roots = nodes.filter(n => n.parent == null || !byId.has(n.parent));
+  const place = (n, lane, depth) => {
+    n.lane = lane; n.depth = depth; maxDepth = Math.max(maxDepth, depth);
+    const ks = (kids.get(n.sid) || []).sort((a, b) => (b.on_path - a.on_path) || (a.sid - b.sid));
+    ks.forEach((c, j) => place(c, j === 0 ? lane : ++lanes, depth + 1));
+  };
+  roots.forEach((r, j) => place(r, j === 0 ? 0 : ++lanes, 0));
+
+  // Which individuals to draw: everything, or only those on a line of descent
+  // (anything bred from, plus the newest generation of each lane).
+  const visible = n => {
+    const all = [...Array(n.n).keys()];
+    if(!linOnly || !kids.has(n.sid)) return all;
+    return all.filter(i => childrenOf.has(K(n.sid, i)) || n.picks.includes(i));
+  };
+  const vis = new Map(nodes.map(n => [n.sid, visible(n)]));
+
+  const s = +linZoom.value, gap = Math.max(3, Math.round(s * .08));
+  const labelW = 64, laneGap = Math.max(60, s);
+  const widest = Math.max(...nodes.map(n => vis.get(n.sid).length), 1);
+  const laneW = labelW + widest * (s + gap) + laneGap;
+  const rowH = s + Math.max(72, Math.round(s * 1.1));
+  const W = (lanes + 1) * laneW, H = (maxDepth + 1) * rowH;
+  linCanvas.style.width = W + 'px';
+  linCanvas.style.height = H + 'px';
+
+  const pos = new Map();
+  nodes.forEach(n => vis.get(n.sid).forEach((i, j) =>
+    pos.set(K(n.sid, i), [n.lane * laneW + labelW + j * (s + gap), n.depth * rowH])));
+
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  const edges = [];
+  const curve = (x1, y1, x2, y2, cls, a, b, bs) => {
+    const ym = (y1 + y2) / 2, p = document.createElementNS(SVGNS, 'path');
+    p.setAttribute('d', `M${x1} ${y1}C${x1} ${ym} ${x2} ${ym} ${x2} ${y2}`);
+    p.setAttribute('class', 'lin-edge' + cls);
+    p.dataset.a = a;
+    if(bs) p.dataset.bs = bs; else p.dataset.b = b;
+    svg.appendChild(p); edges.push(p);
+  };
+  nodes.forEach(n => {
+    if(n.parent == null || !byId.has(n.parent)) return;
+    const pn = byId.get(n.parent), branch = pn.lane !== n.lane;
+    // A branch is joined to its parent lane through one port above its first
+    // row: one dashed line per parent into the port, then the usual lines
+    // fanning out to the children.
+    const port = [n.lane * laneW + labelW + s / 2, n.depth * rowH - (rowH - s) * .55];
+    const viaPort = new Map();
+    vis.get(n.sid).forEach(i => {
+      const k = K(n.sid, i), to = pos.get(k);
+      (parentsOf.get(k) || []).forEach(pk => {
+        const from = pos.get(pk);
+        if(!from) return;
+        const cls = n.kinds[i] === 'survivor' ? ' surv' : '';
+        if(branch){
+          (viaPort.get(pk) || viaPort.set(pk, []).get(pk)).push(k);
+          curve(port[0], port[1], to[0] + s / 2, to[1] - 3, cls, pk, k);
+        } else {
+          curve(from[0] + s / 2, from[1] + s + 3, to[0] + s / 2, to[1] - 3, cls, pk, k);
+        }
+      });
+    });
+    viaPort.forEach((ks, pk) => {
+      const from = pos.get(pk);
+      curve(from[0] + s / 2, from[1] + s + 3, port[0], port[1], ' branch', pk, null, ks.join(','));
+    });
+  });
+  linCanvas.appendChild(svg);
+
+  const cells = new Map();
+  const frag = document.createDocumentFragment();
+  nodes.forEach(n => {
+    const row = document.createElement('div');
+    row.className = 'lin-row' + (n.sid === linData.current ? ' now' : '');
+    row.style.left = (n.lane * laneW) + 'px';
+    row.style.top = (n.depth * rowH + Math.max(0, s / 2 - 18)) + 'px';
+    const branchNote = n.parent != null && byId.has(n.parent) && byId.get(n.parent).lane !== n.lane ? 'branch' : '';
+    row.innerHTML = `<b>G${n.gen}</b>${n.sid === linData.current ? 'now' : branchNote}`;
+    frag.appendChild(row);
+    vis.get(n.sid).forEach(i => {
+      const k = K(n.sid, i), [x, y] = pos.get(k);
+      const c = document.createElement('div');
+      c.className = 'lin-cell' + (n.picks.includes(i) ? ' picked' : '') + (n.kinds[i] === 'new' ? ' new' : '');
+      c.style.cssText = `left:${x}px;top:${y}px;width:${s}px;height:${s}px`;
+      c.dataset.k = k;
+      c.innerHTML = `<img alt="" data-src="/api/lineage/thumb/${n.sid}/${i}">`;
+      frag.appendChild(c);
+      cells.set(k, c);
+    });
+  });
+  linCanvas.appendChild(frag);
+  cells.forEach(c => linObserver.observe(c));
+  linRel = { parentsOf, childrenOf, cells, edges, byId };
+
+  const gens = nodes.length, branches = lanes;
+  const picks = nodes.reduce((a, n) => a + n.picks.length, 0);
+  linCount.textContent = `${gens} generation${gens === 1 ? '' : 's'} · ${branches} branch${branches === 1 ? '' : 'es'} · ${picks} pick${picks === 1 ? '' : 's'}`;
+
+  if(linSel && cells.has(linSel)) litLineage(linSel, true);
+  else if(linSel) closeLinCard();
+
+  // First visit to a run: bring the current generation into view.
+  if(linScrolled !== linRun){
+    linScrolled = linRun;
+    const cur = nodes.find(n => n.sid === linData.current) || nodes.at(-1);
+    const first = cells.get(K(cur.sid, vis.get(cur.sid)[0]));
+    if(first) requestAnimationFrame(() => {
+      // Vertically centre the current generation; horizontally show its
+      // lane from the generation labels on.
+      const box = first.getBoundingClientRect(), page = pageLineage.getBoundingClientRect();
+      pageLineage.scrollTop += box.top - page.top - page.height / 2 + s / 2;
+      $('#lin-scroll').scrollLeft = cur.lane * laneW;
+    });
+  }
+}
+
+function litLineage(key, on){
+  if(!linRel) return;
+  linRel.cells.forEach(c => c.classList.remove('lit'));
+  linRel.edges.forEach(e => e.classList.remove('lit'));
+  linCanvas.classList.toggle('focus', on);
+  if(!on) return;
+  const set = new Set([key]);
+  const walk = (start, rel) => {
+    const todo = [start];
+    while(todo.length){
+      const k = todo.pop();
+      (rel.get(k) || []).forEach(n => { if(!set.has(n)){ set.add(n); todo.push(n); } });
+    }
+  };
+  walk(key, linRel.parentsOf);
+  walk(key, linRel.childrenOf);
+  set.forEach(k => linRel.cells.get(k)?.classList.add('lit'));
+  linRel.edges.forEach(e => {
+    const to = e.dataset.bs ? e.dataset.bs.split(',').some(k => set.has(k)) : set.has(e.dataset.b);
+    if(set.has(e.dataset.a) && to) e.classList.add('lit');
+  });
+}
+
+linCanvas.addEventListener('mouseover', e => {
+  const c = e.target.closest('.lin-cell');
+  if(c) litLineage(c.dataset.k, true);
+});
+linCanvas.addEventListener('mouseleave', () => litLineage(linSel, !!linSel));
+linCanvas.addEventListener('mouseout', e => {
+  if(!e.relatedTarget || !e.relatedTarget.closest('.lin-cell')) litLineage(linSel, !!linSel);
+});
+linCanvas.addEventListener('click', e => {
+  const c = e.target.closest('.lin-cell');
+  if(c) openLinCard(c.dataset.k);
+});
+
+function openLinCard(key){
+  const [sid, i] = key.split(':').map(Number);
+  const n = linRel.byId.get(sid);
+  if(!n) return;
+  linRel.cells.forEach(c => c.classList.toggle('sel', c.dataset.k === key));
+  linSel = key;
+  litLineage(key, true);
+  $('#lin-card-img').src = `/api/lineage/thumb/${sid}/${i}`;
+  $('#lin-card-title').textContent = `Generation ${n.gen} · #${i + 1}`;
+  const ps = n.parents[i] || [], pg = n.parent != null && linRel.byId.get(n.parent);
+  const names = ps.map(p => '#' + (p + 1)).join(' × ');
+  const kind = n.kinds[i];
+  let info = kind === 'survivor' ? `Your pick ${names}, carried over from generation ${pg ? pg.gen : n.gen - 1}.`
+           : kind === 'child' ? (ps.length > 1 ? `Bred from ${names} of generation ${pg ? pg.gen : n.gen - 1}.`
+                                               : `Mutated from ${names || 'your picks'} of generation ${pg ? pg.gen : n.gen - 1}.`)
+           : kind === 'new' ? 'A newcomer with no parents, added for variety.'
+           : 'Part of the starting population.';
+  const nk = (linRel.childrenOf.get(key) || []).length;
+  if(n.picks.includes(i)) info += ` You picked it; ${nk} offspring.`;
+  $('#lin-card-info').textContent = info;
+  $('#lin-card-msg').textContent = '';
+  const run = linData.runs.find(r => r.run === linRun);
+  $('#lin-continue').hidden = !(run && linData.continuable.includes(run.engine));
+  $('#lin-continue').dataset.sid = sid;
+  linCard.classList.remove('hidden');
+}
+
+function closeLinCard(){
+  linSel = null;
+  linCard.classList.add('hidden');
+  if(linRel) linRel.cells.forEach(c => c.classList.remove('sel'));
+  litLineage(null, false);
+}
+$('#lin-card-x').addEventListener('click', closeLinCard);
+document.addEventListener('keydown', e => {
+  if(activeRoute === 'lineage' && e.key === 'Escape' && !linCard.classList.contains('hidden')) closeLinCard();
+});
+
+$('#lin-continue').addEventListener('click', async e => {
+  const msg = $('#lin-card-msg');
+  try{
+    const data = await apiFetch('/api/lineage/open', { sid: +e.currentTarget.dataset.sid });
+    closeLinCard();
+    applyFullState(data);
+    await setRoute('evolve', true);
+  } catch(err){
+    let text = err.message;
+    try{ text = JSON.parse(text).error || text; } catch(_){}
+    msg.textContent = text;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Gallery: masonry wall of everything exported to output/
@@ -1676,6 +2082,17 @@ slCrossover.addEventListener('input', () => {
 slCrossover.addEventListener('change', async () => {
   await sendSettings({ crossover_rate: parseFloat(slCrossover.value) });
 });
+
+const arkBtns = document.querySelectorAll('#ark-style [data-ark]');
+function setArkStyleUI(style){
+  arkBtns.forEach(b => b.setAttribute('aria-checked', String(b.dataset.ark === style)));
+}
+arkBtns.forEach(b => b.addEventListener('click', async () => {
+  if(b.getAttribute('aria-checked') === 'true') return;
+  setArkStyleUI(b.dataset.ark);
+  const data = await sendSettings({ ark_style: b.dataset.ark });
+  renderGrid(data);
+}));
 
 slGrain.addEventListener('input', () => {
   grainVal.textContent = Math.round(slGrain.value);

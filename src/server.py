@@ -19,6 +19,7 @@ import io
 import json
 import os
 import threading
+import time
 import uuid
 import zipfile
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -32,12 +33,13 @@ from collections import OrderedDict
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
+from src import lineage
 from src.gallery import Gallery
 from src.neat.population import Population
 from src.cppn.renderer import render_to_image
 from src.art.palettes import get_palette_array, MALEVICH_PALETTE, SUPREMATIST_PALETTE, HADID_PALETTE, MAPS_PALETTE
 from src.art.fitness import compute_style_fitness
-from src.cppn.activations import MALEVICH_ACTIVATIONS, ALL_ACTIVATIONS
+from src.cppn.activations import MALEVICH_PATTERN_ACTIVATIONS, PATTERN_ACTIVATIONS
 
 from src.shapes.population import ShapePopulation
 from src.shapes.renderer import render_genome, render_genome_extended
@@ -93,7 +95,9 @@ class _GenerationSnapshot:
     ``render_key`` records the render settings the thumbnails were drawn with
     so they are discarded if those settings later change.
     """
-    __slots__ = ("rev", "generation", "genomes", "thumbnails", "render_key")
+    __slots__ = ("rev", "generation", "genomes", "thumbnails", "render_key",
+                 "sid", "parent_sid", "run", "engine", "picks", "kinds", "parents",
+                 "render_spec")
 
     def __init__(self, rev: int, generation: int, genomes: list,
                  thumbnails: list, render_key: tuple):
@@ -102,6 +106,19 @@ class _GenerationSnapshot:
         self.genomes = genomes
         self.thumbnails = thumbnails
         self.render_key = render_key
+        # Lineage: which generation this one was bred from (``parent_sid``),
+        # with which picks, and per individual its kind and parent indices.
+        self.sid = 0
+        self.parent_sid = None
+        self.run = 0
+        self.engine = ""
+        self.picks: list[int] = []
+        self.kinds: list[str] = []
+        self.parents: list[list[int]] = []
+        self.render_spec: tuple = ()
+
+
+MAX_LINEAGE_NODES = 1500   # generations kept for the lineage tree (all runs)
 
 
 class AppState:
@@ -123,6 +140,7 @@ class AppState:
         self._view_cache: OrderedDict = OrderedDict()
         self.grain_strength: float = 8.0
         self.gradient_strength: float = 10.0
+        self.ark_style: str = "painted"       # Arkhitektons: painted / drawing / plaster
         self._networks = []
         self._rev: int = 0
         self.lock = threading.RLock()
@@ -131,6 +149,13 @@ class AppState:
         self._history: list[_GenerationSnapshot] = []
         self._history_idx: int = -1
         self._max_history: int = 200
+        # Lineage tree: every generation ever bred, branches included (the
+        # undo history above drops a branch when you go back and re-evolve).
+        self._nodes: dict[int, _GenerationSnapshot] = {}
+        self._runs: list[dict] = []
+        self._next_sid = 0
+        self._lineage_thumbs: dict[int, list] = {}
+        self._lineage_locks: dict[int, threading.Lock] = {}
         self._home_samples_cache: dict[str, list[str]] | None = None
         self._infographic_cache: dict | None = None
 
@@ -138,26 +163,19 @@ class AppState:
 
     def _activation_options(self) -> list[str]:
         if self.mode == "malevich":
-            return MALEVICH_ACTIVATIONS
-        return ALL_ACTIVATIONS
+            return MALEVICH_PATTERN_ACTIVATIONS
+        return PATTERN_ACTIVATIONS
 
     def _build_cppn_config(self) -> dict:
         return {
             "pop_size": self.pop_size,
-            "num_inputs": 5,
+            "num_inputs": 4,
             "num_outputs": 3,
             "output_activation": "tanh",
             "activation_options": self._activation_options(),
-            "weight_perturb_rate": 0.8,
-            "weight_perturb_power": 0.5,
-            "weight_replace_rate": 0.1,
-            "add_node_rate": 0.03,
-            "add_connection_rate": 0.05,
-            "activation_mutation_rate": 0.1,
-            "toggle_enable_rate": 0.01,
-            "crossover_rate": 0.5,
-            "compatibility_threshold": 3.0,
-            "elitism": 1,
+            # Mutation/crossover rates come from DEFAULT_CONFIG in
+            # src/neat/population.py.
+            "mutation_strength": self.mutation_strength,
         }
 
     # ---- Shape helpers ----
@@ -218,6 +236,7 @@ class AppState:
             self._networks = self.pop.get_networks()
         self._history = []
         self._history_idx = -1
+        self._start_run()
         self._push_history()
 
     def adopt_shapes(self, genomes: list, engine: str = "shapes") -> dict:
@@ -243,7 +262,8 @@ class AppState:
             self.shape_pop.genomes = pool[: self.pop_size]
             self._history = []
             self._history_idx = -1
-            self._push_history()
+            self._start_run()
+            self._push_history(kinds=["seed"] * len(self.shape_pop.genomes))
             return self.get_state_payload()
 
     # ---- History ----
@@ -254,7 +274,7 @@ class AppState:
     def _render_key(self) -> tuple:
         if self._is_shapes():
             return (self.engine, self.thumb_size,
-                    self.grain_strength, self.gradient_strength)
+                    self.grain_strength, self.gradient_strength, self.ark_style)
         return (self.engine, self.palette, self.color_mode, self.thumb_size)
 
     @property
@@ -287,13 +307,43 @@ class AppState:
             self._home_samples_cache = None
         self._infographic_cache = None
 
-    def _push_history(self):
+    def _start_run(self):
+        self._runs.append({"run": len(self._runs) + 1, "engine": self.engine,
+                           "root": None, "started": time.time()})
+
+    def _render_spec(self) -> tuple:
+        if self._is_shapes():
+            return ("shapes", tuple(self._shape_palette()))
+        return ("cppn", self.palette, self.color_mode)
+
+    def _push_history(self, parent: _GenerationSnapshot | None = None,
+                      picks: list[int] | None = None, kinds: list[str] | None = None,
+                      parents: list[list[int]] | None = None):
         genomes = self._current_genomes()
         gen = self._current_generation()
         genome_copies = [g.copy() for g in genomes]
         snap = _GenerationSnapshot(self._new_rev(), gen, genome_copies,
                                    [None] * len(genome_copies),
                                    self._render_key())
+        if not self._runs:
+            self._start_run()
+        run = self._runs[-1]
+        self._next_sid += 1
+        snap.sid = self._next_sid
+        snap.parent_sid = parent.sid if parent is not None else None
+        snap.run = run["run"]
+        snap.engine = self.engine
+        snap.picks = list(picks or [])
+        snap.kinds = list(kinds or (["seed"] * len(genome_copies)))
+        snap.parents = [list(p) for p in (parents or [[] for _ in genome_copies])]
+        snap.render_spec = self._render_spec()
+        if run["root"] is None:
+            run["root"] = snap.sid
+        self._nodes[snap.sid] = snap
+        while len(self._nodes) > MAX_LINEAGE_NODES:
+            old = min(self._nodes)
+            self._nodes.pop(old)
+            self._lineage_thumbs.pop(old, None)
 
         if self._history_idx < len(self._history) - 1:
             self._history = self._history[: self._history_idx + 1]
@@ -315,6 +365,11 @@ class AppState:
         if self.engine in SHAPE_ENGINES and self.shape_pop:
             self.shape_pop.genomes = [g.copy() for g in snap.genomes]
             self.shape_pop.generation = snap.generation
+        elif self.pop is not None and snap.engine == self.engine:
+            # CPPN: breed from the generation on screen, not the newest one.
+            self.pop.genomes = [g.copy() for g in snap.genomes]
+            self.pop.generation = snap.generation
+            self._networks = self.pop.get_networks()
 
     def can_go_prev(self) -> bool:
         return self._history_idx > 0
@@ -348,6 +403,7 @@ class AppState:
                 genomes = [snap.genomes[i] for i in missing]
                 palette = self._shape_palette()
                 grain, gradient = self.grain_strength, self.gradient_strength
+                style = self.ark_style
             else:
                 palette_array = get_palette_array(self.palette)
                 networks = list(self._networks)
@@ -355,7 +411,8 @@ class AppState:
                 color_mode = self.color_mode
 
         if shapes:
-            for k, data in _render_stream(genomes, size, palette, grain, gradient):
+            for k, data in _render_stream(genomes, size, palette, grain, gradient,
+                                          style=style):
                 i = missing[k]
                 thumbs[i] = _b64(data)
                 yield {"i": i, "img": thumbs[i]}
@@ -373,6 +430,30 @@ class AppState:
 
     def _render_home_style_samples(self, style: str, count: int = 6, size: int = 280) -> list[str]:
         """Generate a small gallery for the Home page without mutating live state."""
+        if style == "cppn":
+            # First-generation CPPNs are bare colour gradients; breed a few
+            # generations (with extra structural mutation) so the samples
+            # show what the engine does, quantised to the Suprematist palette.
+            import random as _random
+            cfg = dict(self._build_cppn_config(), pop_size=max(12, count))
+            cpop = Population(cfg)
+            cpop.initialize()
+            for _ in range(8):
+                cpop.evolve_with_selection(_random.sample(range(len(cpop.genomes)), 3))
+            palette_array = get_palette_array("suprematist")
+            out = []
+            for net, g in zip(cpop.get_networks()[:count], cpop.genomes[:count]):
+                img = render_to_image(net, size, size, "rgb", palette_array,
+                                      focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                                      armature_angle=g.comp_armature_angle)
+                out.append(_b64(_encode_jpeg(img)))
+            return out
+        if style in ("renaissance", "flow"):
+            cls = FlowPopulation if style == "flow" else RenaissancePopulation
+            rpop = cls(dict(self._build_shape_config(), pop_size=count))
+            rpop.initialize()
+            return _render_all(rpop.genomes[:count], size, list(SUPREMATIST_PALETTE.values()),
+                               self.grain_strength, self.gradient_strength)
         if style == "hadid":
             palette = list(HADID_PALETTE.values())
         elif style == "maps":
@@ -403,11 +484,16 @@ class AppState:
     def get_home_samples(self, refresh: bool = False) -> dict[str, list[str]]:
         with self._home_lock:
             if self._home_samples_cache is None or refresh:
-                self._home_samples_cache = {
-                    "malevich": self._render_home_style_samples("shapes"),
-                    "hadid": self._render_home_style_samples("hadid"),
-                    "maps": self._render_home_style_samples("maps"),
-                }
+                samples = {}
+                for key, style in (("malevich", "shapes"), ("hadid", "hadid"),
+                                   ("maps", "maps"), ("renaissance", "renaissance"),
+                                   ("flow", "flow"), ("cppn", "cppn")):
+                    try:
+                        samples[key] = self._render_home_style_samples(style)
+                    except Exception as exc:          # one engine must not blank the page
+                        print(f"home samples: {style} failed: {exc!r}")
+                        samples[key] = []
+                self._home_samples_cache = samples
             return self._home_samples_cache
 
     # ---- State payload ----
@@ -438,6 +524,7 @@ class AppState:
             "temperature": self.shape_pop.temperature() if self.shape_pop else 1.0,
             "grain_strength": self.grain_strength,
             "gradient_strength": self.gradient_strength,
+            "ark_style": self.ark_style,
             "thumbnails": list(self._cached_thumbnails),
             "rev": self._history[self._history_idx].rev,
             "has_prev": self.can_go_prev(),
@@ -447,6 +534,9 @@ class AppState:
     # ---- Evolve ----
 
     def evolve(self, selected: list[int]):
+        parent_snap = self._history[self._history_idx] if self._history else None
+        n_before = len(self._current_genomes())
+        picks = [i for i in dict.fromkeys(selected) if 0 <= i < n_before]
         if self.engine in SHAPE_ENGINES:
             self.shape_pop.mutation_strength = self.mutation_strength
             self.shape_pop.refine = self.refine
@@ -456,29 +546,126 @@ class AppState:
             palette_array = get_palette_array(self.palette)
             networks = self._networks
 
-            fitness = [0.0] * len(self.pop.genomes)
-            for idx in selected:
-                if 0 <= idx < len(fitness):
-                    fitness[idx] = 1.0
-
+            # Only the picks breed; the style score just shifts how many
+            # children each pick gets.
+            bonus = [0.0] * len(self.pop.genomes)
             if self.mode != "malevich":
-                for i, net in enumerate(networks):
+                for i in picks:
                     g = self.pop.genomes[i]
                     img = render_to_image(
-                        net, 64, 64, self.color_mode,
+                        networks[i], 64, 64, self.color_mode,
                         focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
                         armature_angle=g.comp_armature_angle,
                     )
                     img_np = np.array(img.convert("RGB")).astype(np.float64) / 255.0
-                    style_bonus = compute_style_fitness(img_np, self.mode, weight=0.2)
-                    fitness[i] += style_bonus
+                    bonus[i] = compute_style_fitness(img_np, self.mode, weight=0.2)
 
-            self.pop.set_fitness(fitness)
-            self.pop.evolve()
+            self.pop.mutation_strength = self.mutation_strength
+            self.pop.evolve_with_selection(picks, bonus)
 
         if self.engine == "cppn":
             self._networks = self.pop.get_networks()
-        self._push_history()
+
+        new = self._current_genomes()
+        tags = lineage.read(new)
+        lineage.clear(new)
+        if all(kind == "new" for kind, _ in tags):
+            # Engine without parentage tags (NEAT): every child is bred from
+            # the picks, but which ones is not recorded.
+            tags = [("child", list(picks)) for _ in new]
+        self._push_history(parent_snap, picks,
+                           [k for k, _ in tags], [p for _, p in tags])
+
+    # ---- Lineage tree ----
+
+    def lineage_payload(self) -> dict:
+        with self.lock:
+            current = self._history[self._history_idx].sid if self._history else None
+            on_path = {snap.sid for snap in self._history}
+            runs = []
+            for run in self._runs:
+                nodes = [n for n in self._nodes.values() if n.run == run["run"]]
+                if not nodes:
+                    continue
+                # A pick is any individual the user bred from: what was sent
+                # with Evolve plus anything a child names as its parent.
+                picked: dict[int, set] = {}
+                for n in nodes:
+                    if n.parent_sid is not None:
+                        got = picked.setdefault(n.parent_sid, set())
+                        got.update(n.picks)
+                        for ps in n.parents:
+                            got.update(ps)
+                runs.append({
+                    "run": run["run"],
+                    "engine": run["engine"],
+                    "started": run["started"],
+                    "nodes": [{
+                        "sid": n.sid,
+                        "parent": n.parent_sid,
+                        "gen": n.generation,
+                        "n": len(n.genomes),
+                        "kinds": n.kinds,
+                        "parents": n.parents,
+                        "picks": sorted(picked.get(n.sid, ())),
+                        "on_path": n.sid in on_path,
+                    } for n in sorted(nodes, key=lambda n: n.sid)],
+                })
+            return {"runs": runs, "current": current, "engine": self.engine,
+                    "continuable": sorted(SHAPE_ENGINES)}
+
+    def lineage_thumb(self, sid: int, index: int) -> bytes | None:
+        """JPEG of one individual of any generation in the tree.  Uses the
+        grid thumbnail when that generation was shown; otherwise renders the
+        whole generation once (with the palette it was bred under)."""
+        with self.lock:
+            snap = self._nodes.get(sid)
+            if snap is None or not 0 <= index < len(snap.genomes):
+                return None
+            if snap.thumbnails[index]:
+                return base64.b64decode(snap.thumbnails[index])
+            lock = self._lineage_locks.setdefault(sid, threading.Lock())
+        with lock:
+            cached = self._lineage_thumbs.get(sid)
+            if cached is None:
+                size = 200
+                spec = snap.render_spec
+                if spec and spec[0] == "shapes":
+                    cached = [base64.b64decode(b) for b in _render_all(
+                        snap.genomes, size, list(spec[1]),
+                        self.grain_strength, self.gradient_strength)]
+                else:
+                    from src.cppn.network import CPPNNetwork
+                    palette_array = get_palette_array(spec[1] if spec else self.palette)
+                    color_mode = spec[2] if spec else self.color_mode
+                    cached = []
+                    for g in snap.genomes:
+                        img = render_to_image(
+                            CPPNNetwork.from_genome(g), size, size, color_mode, palette_array,
+                            focal_x=g.comp_focal_x, focal_y=g.comp_focal_y,
+                            armature_angle=g.comp_armature_angle)
+                        cached.append(_encode_jpeg(img))
+                self._lineage_thumbs[sid] = cached
+            return cached[index]
+
+    def open_lineage_node(self, sid: int) -> dict:
+        """Make a generation from the tree the current one, so evolving
+        continues from it (a new branch if it isn't the latest)."""
+        with self.lock:
+            snap = self._nodes.get(sid)
+            if snap is None:
+                raise ValueError("That generation is no longer kept.")
+            if snap.engine != self.engine or self.engine not in SHAPE_ENGINES:
+                raise ValueError(
+                    f"Switch the engine to {snap.engine} to continue this lineage.")
+            chain = []
+            node = snap
+            while node is not None:
+                chain.append(node)
+                node = self._nodes.get(node.parent_sid) if node.parent_sid else None
+            self._history = chain[::-1][-self._max_history:]
+            self._restore_snapshot(len(self._history) - 1)
+            return self.get_state_payload()
 
     # ---- Export ----
 
@@ -487,7 +674,8 @@ class AppState:
         viewing (PNG bytes, nothing written to disk).  A few recent renders
         are cached so stepping back and forth in the viewer is instant."""
         rev = self._history[self._history_idx].rev
-        key = (rev, index, size, self.grain_strength, self.gradient_strength)
+        key = (rev, index, size, self.grain_strength, self.gradient_strength,
+               self.ark_style)
         cached = self._view_cache.get(key)
         if cached is not None:
             self._view_cache.move_to_end(key)
@@ -495,7 +683,7 @@ class AppState:
         if self._is_shapes():
             genome = self.shape_pop.genomes[index].copy()
             args = (genome, size, "square", self._shape_palette(),
-                    self.grain_strength, self.gradient_strength)
+                    self.grain_strength, self.gradient_strength, self.ark_style)
             try:
                 data = render_pool.submit_hires(*args).result()
             except Exception:  # pool unavailable -> render inline
@@ -527,14 +715,14 @@ class AppState:
             fut = render_pool.submit_hires(
                 self.shape_pop.genomes[index].copy(), self.hires_size,
                 orientation, self._shape_palette(),
-                self.grain_strength, self.gradient_strength)
+                self.grain_strength, self.gradient_strength, self.ark_style)
             try:
                 data = fut.result()
             except Exception:  # pool unavailable -> render inline
                 data = render_pool.render_hires_task(
                     self.shape_pop.genomes[index].copy(), self.hires_size,
                     orientation, self._shape_palette(),
-                    self.grain_strength, self.gradient_strength)
+                    self.grain_strength, self.gradient_strength, self.ark_style)
             path.write_bytes(data)
         else:
             palette_array = get_palette_array(self.palette)
@@ -567,6 +755,7 @@ class AppState:
         _export_jobs[job_id] = job
 
         grain, gradient = self.grain_strength, self.gradient_strength
+        style = self.ark_style
         # Hadid's 3D post-processing needs ~2 GB per in-flight render.
         inflight = 3 if self.engine == "hadid" else None
 
@@ -591,7 +780,7 @@ class AppState:
                         # write each PNG into the zip as soon as it finishes.
                         for i, data in _render_stream(
                                 genomes, res, palette, grain, gradient, "png",
-                                max_inflight=inflight):
+                                max_inflight=inflight, style=style):
                             zf.writestr(f"gen{gen:04d}_{i:02d}.png", data)
                             job["done"] += 1
                     else:
@@ -644,7 +833,7 @@ def _encode_jpeg(img) -> bytes:
 
 
 def _render_stream(genomes, size, palette, grain, gradient, fmt="jpeg",
-                   max_inflight=None):
+                   max_inflight=None, style="painted"):
     """Render genomes on the process pool, yielding ``(index, bytes)`` in
     completion order.
 
@@ -665,10 +854,10 @@ def _render_stream(genomes, size, palette, grain, gradient, fmt="jpeg",
                 i, g = nxt
                 try:
                     fut = render_pool.submit_render(g, size, palette, grain,
-                                                    gradient, fmt)
+                                                    gradient, fmt, style)
                 except Exception:   # pool unusable -> render this one inline
                     yield i, render_pool.render_task(g, size, palette, grain,
-                                                     gradient, fmt)
+                                                     gradient, fmt, style)
                     continue
                 pending[fut] = i
             if not pending:
@@ -680,7 +869,7 @@ def _render_stream(genomes, size, palette, grain, gradient, fmt="jpeg",
                     data = f.result()
                 except Exception:
                     data = render_pool.render_task(genomes[i], size, palette,
-                                                   grain, gradient, fmt)
+                                                   grain, gradient, fmt, style)
                 yield i, data
     finally:
         for f in pending:
@@ -725,6 +914,7 @@ class SettingsRequest(BaseModel):
     detail: float | None = None          # 0 none .. 1 lots of new structure; negative = auto
     grain_strength: float | None = None
     gradient_strength: float | None = None
+    ark_style: str | None = None         # Arkhitektons: painted / drawing / plaster
 
 
 # ---------------------------------------------------------------------------
@@ -856,6 +1046,9 @@ def api_settings(req: SettingsRequest):
         rerender = True
     if req.gradient_strength is not None:
         state.gradient_strength = max(0.0, min(30.0, req.gradient_strength))
+        rerender = True
+    if req.ark_style in ("painted", "drawing", "plaster") and req.ark_style != state.ark_style:
+        state.ark_style = req.ark_style
         rerender = True
     if rerender and state.shape_pop and state._history:
         state.invalidate_thumbnails()   # re-rendered lazily via /api/thumbs/stream
@@ -1169,6 +1362,41 @@ def evolve_page():
 @app.get("/gallery", response_class=HTMLResponse)
 def gallery_page():
     return HTMLResponse((STATIC_DIR / "index.html").read_text())
+
+
+@app.get("/lineage", response_class=HTMLResponse)
+def lineage_page():
+    return HTMLResponse((STATIC_DIR / "index.html").read_text())
+
+
+# ---------------------------------------------------------------------------
+# Lineage tree: every generation of every run since the server started
+# ---------------------------------------------------------------------------
+
+class LineageOpenRequest(BaseModel):
+    sid: int
+
+
+@app.get("/api/lineage")
+def api_lineage():
+    return JSONResponse(state.lineage_payload())
+
+
+@app.get("/api/lineage/thumb/{sid}/{index}")
+def api_lineage_thumb(sid: int, index: int):
+    data = state.lineage_thumb(sid, index)
+    if data is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return Response(data, media_type="image/jpeg",
+                    headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.post("/api/lineage/open")
+def api_lineage_open(req: LineageOpenRequest):
+    try:
+        return JSONResponse(state.open_lineage_node(req.sid))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
 
 
 # ---------------------------------------------------------------------------

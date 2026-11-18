@@ -20,6 +20,7 @@ import json
 import random
 from pathlib import Path
 
+from src import lineage
 from src.flow.genome import (
     FlowGenome, composition_score, create_random, crossover, mutate,
 )
@@ -60,19 +61,24 @@ class FlowPopulation:
 
     def _child(self, parents: list[FlowGenome], temp: float) -> FlowGenome:
         if len(parents) >= 2 and random.random() < self.crossover_rate:
-            a, b = random.sample(parents, 2)
-            child = crossover(a, b)
+            src = random.sample(parents, 2)
+            child = crossover(*src)
         else:
-            child = random.choice(parents).copy()
+            src = [random.choice(parents)]
+            child = src[0].copy()
+        lineage.child(child, *src)
         mutate(child, self.mutation_strength, temp, self._drift(temp))
         return child
 
     def evolve_with_selection(self, selected: list[int]) -> None:
-        parents = [self.genomes[i] for i in selected if 0 <= i < len(self.genomes)]
-        if not parents:
-            parents = [random.choice(self.genomes)]
+        sel = [i for i in selected if 0 <= i < len(self.genomes)]
+        if not sel:
+            sel = [random.randrange(len(self.genomes))]
+        parents = [self.genomes[i] for i in sel]
+        lineage.mark_parents(parents, sel)
         temp = self.temperature()
-        keep = [p.copy() for p in parents[: max(self.elitism, len(parents))]][: self.pop_size]
+        keep = [lineage.survivor(p.copy(), p)
+                for p in parents[: max(self.elitism, len(parents))]][: self.pop_size]
         # Survivors are repainted a little more carefully too, so keeping a
         # favourite never stalls the convergence.  Their strokes are seeded,
         # so the picture stays recognisably the same.

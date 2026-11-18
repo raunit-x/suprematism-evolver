@@ -88,6 +88,18 @@ MALEVICH_ACTIVATIONS = ["sigmoid", "step", "gaussian", "tanh", "abs", "linear"]
 BASQUIAT_ACTIVATIONS = ["sin", "sawtooth", "relu", "tanh", "gaussian", "softplus", "square"]
 ALL_ACTIVATIONS = list(ACTIVATIONS.keys())
 
+# Weighted pools for the CPPN engine's new/mutated nodes (random.choice over a
+# list with repeats).  Pattern comes from periodic and bump functions:
+# without sin/cos/sawtooth a CPPN cannot make repetition, spirals, ripples or
+# interference, however many nodes it grows.  The Malevich pool still leans
+# on hard edges and flat fields but keeps the periodic functions in reach.
+PATTERN_ACTIVATIONS = (["sin"] * 3 + ["cos"] * 2 + ["gaussian"] * 3 + ["sawtooth"] * 2
+                       + ["abs"] * 2 + ["step"] * 2 + ["tanh", "sigmoid", "square",
+                                                       "linear", "relu", "softplus", "inv"])
+MALEVICH_PATTERN_ACTIVATIONS = (["step"] * 3 + ["gaussian"] * 3 + ["abs"] * 2
+                                + ["sigmoid"] * 2 + ["sin"] * 2 + ["cos", "sawtooth",
+                                                                   "tanh", "linear"])
+
 
 def get_activation(name: str):
     """Look up activation function by name."""

@@ -85,8 +85,21 @@ def _is_flow(genome) -> bool:
     return getattr(genome, "engine_tag", None) == "flow"
 
 
+def _ark_style(genome, style: str) -> str | None:
+    """The Arkhitekton look to use for this genome, or None for the
+    painted renderer (non-3D genomes, maps, or the painted style)."""
+    if style not in ("drawing", "plaster"):
+        return None
+    if getattr(genome, "engine_tag", "") not in ("", "hadid") \
+            or getattr(genome, "city", None) is not None:
+        return None
+    if getattr(genome, "projection_strength", 0.0) <= 0.01:
+        return None
+    return style
+
+
 def render_task(genome, size: int, palette, grain: float, gradient: float,
-                fmt: str = "jpeg") -> bytes:
+                fmt: str = "jpeg", style: str = "painted") -> bytes:
     if _is_flow(genome):
         # The grain slider scales the impasto relief.
         from src.flow.renderer import render_flow
@@ -96,13 +109,17 @@ def render_task(genome, size: int, palette, grain: float, gradient: float,
         from src.renaissance.renderer import render_scene
         img = render_scene(genome, size, size, brush_scale=grain / 8.0)
         return _encode(img, fmt)
+    ark = _ark_style(genome, style)
+    if ark:
+        from src.shapes.arkhitekton import render_arkhitekton
+        return _encode(render_arkhitekton(genome, size, size, ark, palette), fmt)
     from src.shapes.renderer import render_genome
     img = render_genome(genome, size, size, palette, grain, gradient)
     return _encode(img, fmt)
 
 
 def render_hires_task(genome, size: int, orientation: str, palette,
-                      grain: float, gradient: float) -> bytes:
+                      grain: float, gradient: float, style: str = "painted") -> bytes:
     if _is_flow(genome):
         from src.flow.renderer import render_flow_extended
         img = render_flow_extended(genome, size, orientation, impasto_scale=grain / 8.0)
@@ -112,6 +129,12 @@ def render_hires_task(genome, size: int, orientation: str, palette,
         img = render_scene_extended(genome, size, orientation,
                                     brush_scale=grain / 8.0)
         return _encode(img, "png")
+    ark = _ark_style(genome, style)
+    if ark:
+        from src.shapes.arkhitekton import render_arkhitekton
+        w, h = {"landscape": (int(size * 1.5), size),
+                "portrait": (size, int(size * 1.5))}.get(orientation, (size, size))
+        return _encode(render_arkhitekton(genome, w, h, ark, palette), "png")
     from src.shapes.renderer import render_genome_extended
     img = render_genome_extended(genome, size, orientation, palette,
                                  grain, gradient)
@@ -119,12 +142,12 @@ def render_hires_task(genome, size: int, orientation: str, palette,
 
 
 def submit_render(genome, size: int, palette, grain: float, gradient: float,
-                  fmt: str = "jpeg") -> Future:
+                  fmt: str = "jpeg", style: str = "painted") -> Future:
     return get_pool().submit(render_task, genome, size, palette, grain,
-                             gradient, fmt)
+                             gradient, fmt, style)
 
 
 def submit_hires(genome, size: int, orientation: str, palette, grain: float,
-                 gradient: float) -> Future:
+                 gradient: float, style: str = "painted") -> Future:
     return get_pool().submit(render_hires_task, genome, size, orientation,
-                             palette, grain, gradient)
+                             palette, grain, gradient, style)
